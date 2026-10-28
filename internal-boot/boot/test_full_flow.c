@@ -18,17 +18,30 @@ static EFI_STATUS Unlock(VOID *v){TEST *t=v;t->unlocks++;return t->unlock;}
 static EFI_STATUS SkipWindows(VOID *v){TEST *t=v;t->skipBoots++;return t->windows;}
 static EFI_STATUS Windows(VOID *v){TEST *t=v;t->boots++;return t->windows;}
 static EFI_STATUS Record(VOID *v,const char *event,EFI_STATUS s){(void)event;(void)s;TEST *t=v;return ++t->records==t->recordFail?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+#ifdef GU_PRODUCTION_BOOT
+static EFI_STATUS Run(TEST *t){GU_FULL_FLOW_OPS o={t,Prepare,Choose,NULL,Release,Verify,Unlock,SkipWindows,Windows,Record};return GuFullFlow(&o);}
+#else
 static EFI_STATUS Run(TEST *t){GU_FULL_FLOW_OPS o={t,Prepare,Choose,Capture,Release,Verify,Unlock,SkipWindows,Windows,Record};return GuFullFlow(&o);}
+#endif
 int main(void) {
   TEST t={0};Check(Run(&t)==EFI_ABORTED && t.releases==1 && t.verifies==1 && t.unlocks==1 && t.boots==1,"normal path invokes unlock and Windows exactly once");
   t=(TEST){.skip=TRUE};Check(Run(&t)==EFI_ABORTED && !t.releases && !t.unlocks && t.skipBoots==1 && !t.boots && !t.captures,"Esc uses only original Windows without mutation");
   EFI_STATUS bad[]={EFI_DEVICE_ERROR,EFI_ACCESS_DENIED,EFI_ABORTED,EFI_WARN_UNKNOWN_GLYPH};
+#ifdef GU_PRODUCTION_BOOT
+  t=(TEST){0};Check(Run(&t)==EFI_ABORTED && !t.captures,"production never captures the diagnostic graph");
+  {GU_FULL_FLOW_OPS o={&t,Prepare,Choose,Capture,Release,Verify,Unlock,SkipWindows,Windows,Record};
+   t=(TEST){0};Check(GuFullFlow(&o)==EFI_INVALID_PARAMETER && !t.releases,"production refuses a capture step");}
+#endif
   for(UINTN i=0;i<4;i++) {
     t=(TEST){.prepare=bad[i]};Check(Run(&t)==bad[i] && !t.releases && !t.unlocks && !t.boots,"load failure blocks all mutations");
     t=(TEST){.choose=bad[i]};Check(Run(&t)==bad[i] && !t.releases && !t.unlocks && !t.boots,"choice failure blocks all mutations");
+#ifdef GU_PRODUCTION_BOOT
+    t=(TEST){.release=bad[i]};Check(Run(&t)==bad[i] && t.releases==1 && !t.captures && !t.unlocks && !t.boots,"partial prepare failure: no unlock/Windows/retry");
+#else
     t=(TEST){.before=bad[i]};Check(Run(&t)==bad[i] && !t.releases && !t.unlocks && !t.boots,"capture failure blocks all mutations");
     t=(TEST){.release=bad[i]};Check(Run(&t)==bad[i] && t.releases==1 && t.captures==2 && !t.unlocks && !t.boots,"partial prepare failure has evidence but no unlock/Windows/retry");
     t=(TEST){.after=bad[i]};Check(Run(&t)==bad[i] && t.releases==1 && !t.unlocks && !t.boots,"post capture failure blocks unlock/Windows");
+#endif
     t=(TEST){.verify=bad[i]};Check(Run(&t)==bad[i] && t.verifies==1 && !t.unlocks && !t.boots,"late target/AMD drift blocks unlock/Windows");
     t=(TEST){.unlock=bad[i]};Check(Run(&t)==bad[i] && t.unlocks==1 && !t.boots,"original app failure/timeout/cancel/warning never boots Windows");
     t=(TEST){.windows=bad[i]};Check(Run(&t)==bad[i] && t.unlocks==1 && t.boots==1,"returned Windows status is preserved");

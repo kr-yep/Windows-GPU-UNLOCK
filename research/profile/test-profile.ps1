@@ -91,6 +91,9 @@ try {
  $w=@('-std=c11','-O1','-Wall','-Wextra','-Werror','-D_CRT_SECURE_NO_WARNINGS','-I','build/cold/include','-I','../../deps/edk2/MdePkg/Include','-I','../../deps/edk2/MdePkg/Include/X64')
  Run-Job 'cold pre-check (read-only)' ($w+$profile+@('-DGU_HEADLESS_RESEARCH','-DGU_SINGLE_RTX_CONSOLE','-DGU_FULL_UNLOCK','-DGU_AUTOMATIC_BOOT','test_cold_precheck.c','console-flow.c','../unlock/checks.c','../unlock/sha256.c','-o','build/cold/test-cold-local.exe')) @('./build/cold/test-cold-local.exe')
  Run-Job 'full flow gates' ($w+@('test_full_flow.c','full-flow.c','-o','build/cold/test-full-flow.exe')) @('./build/cold/test-full-flow.exe')
+ # Daily-boot build: same tests compiled with GU_PRODUCTION_BOOT, so the evidence covers the shipped binary.
+ Run-Job 'production full flow gates' ($w+@('-DGU_PRODUCTION_BOOT','test_full_flow.c','full-flow.c','-o','build/cold/test-full-flow-production.exe')) @('./build/cold/test-full-flow-production.exe')
+ Run-Job 'production cold pre-check' ($w+$profile+@('-DGU_HEADLESS_RESEARCH','-DGU_SINGLE_RTX_CONSOLE','-DGU_FULL_UNLOCK','-DGU_AUTOMATIC_BOOT','-DGU_PRODUCTION_BOOT','test_cold_precheck.c','console-flow.c','../unlock/checks.c','../unlock/sha256.c','-o','build/cold/test-cold-production.exe')) @('./build/cold/test-cold-production.exe')
  if($hw.NoEdidDriver) {
   # No reviewed profile releases the GPU without an EDID stage, so replay the whole driver release
   # on this machine's own graph, driver image, PROM and PCI config, and require it in the evidence.
@@ -117,7 +120,8 @@ try {
   @{Name='manual entry-latched';Defs=@('-DGU_INTERNAL_BOOT');Src=@('tests/test_entry_latched.c')+$app;Args=@($prom,$cold,$Assets)},
   @{Name='automatic internal';Defs=@('-DGU_INTERNAL_BOOT','-DGU_AUTOMATIC_BOOT');Src=@('tests/test_automatic.c')+$app;Args=@($prom,$cold,$Assets)},
   @{Name='headless internal';Defs=@('-DGU_INTERNAL_BOOT','-DGU_AUTOMATIC_BOOT','-DGU_HEADLESS_RESEARCH');Src=@('tests/test_headless.c')+$app;Args=@($prom,$cold,$Assets)},
-  @{Name='headless USB (shipped child)';Defs=@('-DGU_INTERNAL_BOOT','-DGU_AUTOMATIC_BOOT','-DGU_HEADLESS_RESEARCH','-DGU_USB_MEDIA');Src=@('tests/test_headless.c')+$app;Args=@($prom,$cold,$Assets)}
+  @{Name='headless USB (shipped child)';Defs=@('-DGU_INTERNAL_BOOT','-DGU_AUTOMATIC_BOOT','-DGU_HEADLESS_RESEARCH','-DGU_USB_MEDIA');Src=@('tests/test_headless.c')+$app;Args=@($prom,$cold,$Assets)},
+  @{Name='production headless USB (shipped child)';Defs=@('-DGU_INTERNAL_BOOT','-DGU_AUTOMATIC_BOOT','-DGU_HEADLESS_RESEARCH','-DGU_USB_MEDIA','-DGU_PRODUCTION_BOOT');Src=@('tests/test_headless.c')+$app;Args=@($prom,$cold,$Assets)}
  )
  $i=0
  foreach($v in $variants){$exe="$out/tx-$i.exe";$i++;Run-Job $v.Name ($latched+$v.Defs+$v.Src+@('-o',$exe)) (@("./$exe")+$v.Args)}

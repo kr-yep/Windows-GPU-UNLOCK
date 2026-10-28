@@ -506,7 +506,12 @@ EFI_STATUS GuPrepareConsole(EFI_SYSTEM_TABLE *t,GU_PREPARE_LOG log,VOID *context
   s=log(context,"stage2a-success-no-unlock-no-gop-removal",EFI_SUCCESS);
   if(s!=EFI_SUCCESS)return s;
   PreparedPlan=p;PreparedGraph=&original;PreparedReady=TRUE;
+#ifdef GU_PRODUCTION_BOOT
+  /* GuReleaseGop verifies the prepared console first; nothing runs in between. */
+  return EFI_SUCCESS;
+#else
   return GuVerifyPreparedConsole(t);
+#endif
 }
 EFI_STATUS GuVerifyPreparedConsole(EFI_SYSTEM_TABLE *t) {
   if(!PreparedReady || !t || !t->BootServices || !PreparedGraph)return EFI_NOT_READY;

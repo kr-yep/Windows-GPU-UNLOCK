@@ -548,9 +548,14 @@ static EFI_STATUS RestoreDecode(VOID) {
   if(!Full.Captured || !Full.Released || Full.Owned)return EFI_ACCESS_DENIED;
   EFI_BOOT_SERVICES *bs=Full.Table->BootServices;EFI_PCI_IO_PROTOCOL *io=NULL;
   static GRAPH claimGraph;UINT32 claimConfig[64]={0};UINT64 claimMask=0;
+#ifdef GU_PRODUCTION_BOOT
+  /* The pre-claim read only fed the config dump; the authoritative read follows. */
+  EFI_STATUS s;
+#else
   EFI_STATUS s=ReadConfigFull(claimConfig);
   if(s==EFI_SUCCESS)s=LogConfig("post-nv-pci",claimConfig);
   if(s!=EFI_SUCCESS)return s;
+#endif
   EFI_TPL old=bs->RaiseTPL(TPL_NOTIFY);
   s=ReadConfigFull(claimConfig);
   if(s==EFI_SUCCESS && !GuDecodeRestoreMask(Full.Config,claimConfig,&claimMask))s=EFI_NOT_READY;

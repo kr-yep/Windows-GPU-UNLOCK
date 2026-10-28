@@ -25,8 +25,16 @@ static EFI_STATUS EFIAPI HeadLocate(EFI_LOCATE_SEARCH_TYPE t,EFI_GUID *g,VOID *k
   }
   return preflight_locate(t,g,key,n,h);
 }
+#ifdef GU_PRODUCTION_BOOT
+/* Production has no key reads or log writes, so late changes are injected when
+ * the last asset file is read: the last I/O before the final hardware gate. */
+static BOOLEAN AssetsDone;
+#define LATE_TRIGGER (AssetsDone && current_tpl==TPL_NOTIFY)
+#else
+#define LATE_TRIGGER (Reads>=5)
+#endif
 static EFI_STATUS EFIAPI HeadFree(VOID *memory) {
-  if((Case==14 || Case==15) && Reads>=5 && GuHeadless.ready && !LateDelivered) {
+  if((Case==14 || Case==15) && LATE_TRIGGER && GuHeadless.ready && !LateDelivered) {
     /* A protocol notification scheduled by pool cleanup must not execute in
      * the middle of the observation/baseline commit. */
     CHECK(current_tpl==TPL_NOTIFY);LatePending=TRUE;
@@ -44,7 +52,12 @@ static EFI_STATUS EFIAPI HeadOpens(EFI_HANDLE h,EFI_GUID *g,EFI_OPEN_PROTOCOL_IN
   if(Case==8)return EFI_WARN_UNKNOWN_GLYPH;
   EFI_STATUS s=open_info(h,g,e,n);
   if(s==EFI_SUCCESS && !*n && guid(g,&pg) && exclusive) {
-    *n=Case==11 && Reads>=5?2:1;CHECK(allocate_pool(EfiLoaderData,*n*sizeof(**e),(VOID **)e)==EFI_SUCCESS);
+#ifdef GU_PRODUCTION_BOOT
+    *n=Case==11 && AssetsDone?2:1;
+#else
+    *n=Case==11 && Reads>=5?2:1;
+#endif
+    CHECK(allocate_pool(EfiLoaderData,*n*sizeof(**e),(VOID **)e)==EFI_SUCCESS);
     **e=(EFI_OPEN_PROTOCOL_INFORMATION_ENTRY){Gu.image,NULL,EFI_OPEN_PROTOCOL_EXCLUSIVE,1};
     if(*n==2)(*e)[1]=(EFI_OPEN_PROTOCOL_INFORMATION_ENTRY){H(8),H(3),EFI_OPEN_PROTOCOL_BY_DRIVER,1};
   }
@@ -64,8 +77,25 @@ static EFI_STATUS EFIAPI HeadWrite(EFI_FILE_PROTOCOL *f,UINTN *n,VOID *data) {
   if(Case==13 && !strncmp(data,"ARMED: one transaction",22))registers[SS0/4]^=1;
   return file_write(f,n,data);
 }
+#ifdef GU_PRODUCTION_BOOT
+static EFI_STATUS EFIAPI HeadRead(EFI_FILE_PROTOCOL *f,UINTN *n,VOID *data) {
+  EFI_STATUS s=file_read(f,n,data);FILE_FAKE *v=(FILE_FAKE *)f;
+  if(v->kind==8 && !AssetsDone) {
+    AssetsDone=TRUE;
+    if(Case==4)st.ConsoleInHandle=H(15);
+    if(Case==5 || Case==10)conin.WaitForKey=(VOID *)45;
+    if(Case==12)config[16]^=1;
+    if(Case==13)registers[SS0/4]^=1;
+  }
+  return s;
+}
+#endif
 static VOID HeadSetup(int mode) {
   entry_setup(mode==7?APP_FLUSH:APP_SUCCESS,0x03000062,6);Case=mode;Reads=Outputs=0;
+#ifdef GU_PRODUCTION_BOOT
+  AssetsDone=FALSE;
+  for(int i=4;i<9;i++)files[i].protocol.Read=HeadRead;
+#endif
   LatePending=LateDelivered=LatePhysical=FALSE;
   memset(Media,0,sizeof(Media));Media[0]=4;Media[1]=1;Media[2]=42;Media[4]=1;Media[16]=1;
   memcpy(Media+24,&GuInternalPartition,16);Media[40]=2;Media[41]=2;memcpy(Media+42,(UINT8[]){127,255,4,0},4);
@@ -82,6 +112,22 @@ static VOID HeadSetup(int mode) {
 }
 int main(int argc,char **argv) {
   CHECK(argc==4);exact_load(argv[1],argv[2]);load_fixture_assets(argv[1],argv[3]);memcpy(originals,GuAssets,sizeof(originals));
+#ifdef GU_PRODUCTION_BOOT
+  /* Production: no Esc window (no key reads), no log/report writes. Esc (6), flush
+   * failure (7) and write warning (9) no longer have anything to act on, so they
+   * must succeed; every hardware, display, owner and late-change case is refused. */
+  for(int mode=0;mode<=15;mode++) {
+    HeadSetup(mode);EFI_STATUS s=run_app();
+    CHECK(Reads==0 && report_bytes==0);
+    if(mode==0 || mode==2 || mode==6 || mode==7 || mode==9) {
+      CHECK(s==EFI_SUCCESS && fake.flrs==1 && fake.gsp_starts==1 && fake.sec2_starts==1);
+      CHECK(registers[SS0/4]==0x88888888 && registers[SS1/4]==8 && Gu.quiesced && !halted && !fake.pool_live);
+    }else{CHECK(s!=EFI_SUCCESS && !Gu.started && !fake.mmio_writes && !fake.master_enables && !fake.flrs);}
+    if(mode==14 || mode==15)CHECK(LateDelivered && !LatePending && !Gu.dma_count);
+    CHECK(current_tpl==TPL_APPLICATION);
+    CHECK(!Outputs && !disconnect_calls);dispose_host_fixture();
+  }
+#else
   for(int mode=0;mode<=15;mode++) {
     HeadSetup(mode);EFI_STATUS s=run_app();
     if(mode==0 || mode==2) {
@@ -92,11 +138,16 @@ int main(int argc,char **argv) {
     CHECK(current_tpl==TPL_APPLICATION);
     CHECK(!Outputs && !disconnect_calls);dispose_host_fixture();
   }
+#endif
 #ifdef GU_USB_MEDIA
   /* A USB build loaded from an internal partition must refuse before any hardware effect. */
   UseInternalMedia=TRUE;HeadSetup(0);EFI_STATUS internal=run_app();UseInternalMedia=FALSE;
   CHECK(internal!=EFI_SUCCESS && !Gu.started && !fake.mmio_writes && !fake.master_enables && !fake.flrs);dispose_host_fixture();
   puts("PASS USB media: USB child volume accepted; internal-partition child volume refused");
 #endif
+#ifdef GU_PRODUCTION_BOOT
+  puts("PASS production headless child: no key reads or log writes; zero-GOP/virtual success; physical/invalid GOP, owner warning, late input/config/SS0/owner/notification changes after asset load refused; console calls zero");return 0;
+#else
   puts("PASS headless real app/core: zero-GOP and virtual-only success; physical/invalid GOP, late input/log mutation, Esc, file warning/failure and owner warning blocked; console calls zero");return 0;
+#endif
 }

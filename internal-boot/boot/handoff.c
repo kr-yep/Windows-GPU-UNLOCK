@@ -7,7 +7,9 @@
 #include <Guid/FileInfo.h>
 #include "media.h"
 #include "flow.h"
-#ifdef GU_HEADLESS_RESEARCH
+#if defined(GU_HEADLESS_RESEARCH) && defined(GU_PRODUCTION_BOOT)
+#include "build/headless-production/child-contract.h"
+#elif defined(GU_HEADLESS_RESEARCH)
 #include "build/headless/child-contract.h"
 #elif defined(GU_AUTOMATIC_BOOT)
 #include "build/automatic/child-contract.h"
@@ -28,8 +30,17 @@
 #error Console prepare must not load the unlock application
 #endif
 #endif
+#ifdef GU_PRODUCTION_BOOT
+/* Daily-boot build: same hardware gates, no Esc wait, graph captures or success
+ * log. Only a failure record is written. Qualification stays in host tests. */
+#if !defined(GU_FULL_UNLOCK) || !defined(GU_HEADLESS_RESEARCH) || !defined(GU_USB_MEDIA) || !defined(GU_AUTOMATIC_BOOT)
+#error GU_PRODUCTION_BOOT is the headless USB automatic unlock only
+#endif
+#endif
 #ifdef GU_FULL_UNLOCK
+#ifndef GU_PRODUCTION_BOOT
 #include "diagnostic.h"
+#endif
 #include "full-release.h"
 #include "full-flow.h"
 #if defined(GU_DIAGNOSTIC_ONLY) || defined(GU_CONSOLE_PREPARE)
@@ -55,7 +66,12 @@ static EFI_FILE_PROTOCOL *Root,*Log;
  * close forbids StartImage; retain the first failure for the caller. */
 static EFI_STATUS CloseBootFiles(EFI_STATUS *LogStatus,EFI_STATUS *RootStatus) {
   EFI_FILE_PROTOCOL *log=Log,*root=Root;Log=NULL;Root=NULL;
+#ifdef GU_PRODUCTION_BOOT
+  /* No log unless a failure record was written. */
+  EFI_STATUS a=!log?EFI_SUCCESS:log->Close?log->Close(log):EFI_INVALID_PARAMETER;
+#else
   EFI_STATUS a=log && log->Close?log->Close(log):EFI_INVALID_PARAMETER;
+#endif
   EFI_STATUS b=root && root->Close?root->Close(root):EFI_INVALID_PARAMETER;
   if(LogStatus)*LogStatus=a;
   if(RootStatus)*RootStatus=b;
@@ -127,6 +143,9 @@ static EFI_STATUS OpenLog(VOID) {
   EFI_STATUS s=Table->BootServices->HandleProtocol(OwnDevice,&FsGuid,(VOID **)&fs);
   if(s!=EFI_SUCCESS || !fs)return EFI_UNSUPPORTED;
   s=fs->OpenVolume(fs,&Root);if(s!=EFI_SUCCESS || !Root)return EFI_DEVICE_ERROR;
+#ifdef GU_PRODUCTION_BOOT
+  return EFI_SUCCESS; /* Record opens FAILURE.TXT only when a failure occurs. */
+#else
 #ifdef GU_AUTOMATIC_BOOT
   for(UINTN i=0;i<1000000;i++) {
 #ifdef GU_HEADLESS_RESEARCH
@@ -164,11 +183,21 @@ static EFI_STATUS OpenLog(VOID) {
     return s==EFI_SUCCESS && Log?EFI_SUCCESS:EFI_DEVICE_ERROR;
   }
   return EFI_VOLUME_FULL;
+#endif
 }
 static EFI_STATUS Record(VOID *Context,const char *Event,EFI_STATUS Status) {
   (void)Context;char text[160];UINTN n=0;
 #ifdef GU_FULL_UNLOCK
   if(Status!=EFI_SUCCESS)ScreenStatus(Event,Status);
+#endif
+#ifdef GU_PRODUCTION_BOOT
+  if(Status==EFI_SUCCESS)return EFI_SUCCESS;
+  if(!Log) {
+    if(!Root)return EFI_DEVICE_ERROR;
+    EFI_STATUS o=Root->Open(Root,&Log,L"\\RTX3090-UNLOCK\\FAILURE.TXT",EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+    if(o!=EFI_SUCCESS || !Log){Log=NULL;return EFI_DEVICE_ERROR;}
+    if(Log->SetPosition(Log,0xFFFFFFFFFFFFFFFFULL)!=EFI_SUCCESS)return EFI_DEVICE_ERROR;
+  }
 #endif
   if(!Log)return EFI_DEVICE_ERROR;
   while(*Event && n<100)text[n++]=*Event++;
@@ -274,6 +303,7 @@ static EFI_STATUS Unlock(VOID *Context) {
 #ifdef GU_FULL_UNLOCK
 static EFI_STATUS FullChoice(VOID *Context,BOOLEAN *Skip) {
   (void)Context;*Skip=FALSE;
+#ifndef GU_PRODUCTION_BOOT
   if(!Table->ConIn || !Table->ConIn->ReadKeyStroke)return EFI_UNSUPPORTED;
 #ifdef GU_HEADLESS_RESEARCH
   Say(L"SINGLE RTX HEADLESS UNLOCK RESEARCH: one guarded attempt, then Windows.\r\nNo key required. Esc within 5 seconds skips all changes.\r\nScreen may stop updating. Errors stop without reset/retry; power off and F8 Windows Boot Manager.\r\n");
@@ -288,13 +318,16 @@ static EFI_STATUS FullChoice(VOID *Context,BOOLEAN *Skip) {
     if(s!=EFI_SUCCESS && s!=EFI_NOT_READY)return s;
     s=Table->BootServices->Stall(100000);if(s!=EFI_SUCCESS)return s;
   }
+#endif
   /* Before any release: a GPU that is not in its power-on state (warm restart,
    * already unlocked) would only fail VerifyCold after the display is gone.
    * Skip instead, so Windows starts with nothing changed. */
   UINT32 cold[9];EFI_STATUS c=GuPeekCold(Table,cold);
   EFI_STATUS r=Record(NULL,"pre-release-cold-check",c);
+#ifndef GU_PRODUCTION_BOOT
   if(r==EFI_SUCCESS)r=Record(NULL,"pre-release-cold-wpr2-hi",cold[4]);
   if(r==EFI_SUCCESS)r=Record(NULL,"pre-release-cold-ss0",cold[6]);
+#endif
   if(r!=EFI_SUCCESS)return r;
   if(c!=EFI_SUCCESS) {
     Say(L"GPU cold-state prerequisites could not be verified.\r\nStarting Windows without driver release or unlock. Check the pre-release log before another attempt.\r\n");
@@ -302,7 +335,9 @@ static EFI_STATUS FullChoice(VOID *Context,BOOLEAN *Skip) {
   }
   return EFI_SUCCESS;
 }
+#ifndef GU_PRODUCTION_BOOT
 static EFI_STATUS FullCapture(VOID *Context) {(void)Context;return GuCaptureGraphOnVolume(Table,Log,Root);}
+#endif
 static BOOLEAN ReleaseStarted;
 static EFI_STATUS FullRelease(VOID *Context) {
   ReleaseStarted=TRUE;
@@ -330,10 +365,16 @@ static EFI_STATUS ReportVerification(EFI_STATUS s) {
 }
 static EFI_STATUS FullWindows(VOID *Context) {
   (void)Context;Say(L"Unlock returned success. Checking Windows handoff, no reset.\r\n");
+#ifdef GU_PRODUCTION_BOOT
+  /* The post-close final verification below is the handoff gate; a pre-close
+   * pass would only repeat it with nothing but a file close in between. */
+  EFI_STATUS s;
+#else
   EFI_STATUS s=Record(NULL,"windows-preclose-verify-begin",EFI_SUCCESS);if(s!=EFI_SUCCESS)return s;
   s=GuVerifyReleased(Table,FALSE);
   s=ReportVerification(s);if(s!=EFI_SUCCESS)return s;
   s=Record(NULL,"windows-close-files-next-then-final-verify-and-StartImage",EFI_SUCCESS);if(s!=EFI_SUCCESS)return s;
+#endif
   EFI_STATUS logStatus,rootStatus;
   s=CloseBootFiles(&logStatus,&rootStatus);
   ScreenStatus("windows-close-log",logStatus);
@@ -405,7 +446,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
   if(s!=EFI_SUCCESS || !loaded)Stop();
   OwnDevice=loaded->DeviceHandle;
 #ifdef GU_FULL_UNLOCK
+#ifdef GU_PRODUCTION_BOOT
+  GU_FULL_FLOW_OPS ops={NULL,Prepare,FullChoice,NULL,FullRelease,FullVerifyCold,Unlock,Windows,FullWindows,Record};
+#else
   GU_FULL_FLOW_OPS ops={NULL,Prepare,FullChoice,FullCapture,FullRelease,FullVerifyCold,Unlock,Windows,FullWindows,Record};
+#endif
   s=GuFullFlow(&ops);
 #elif defined(GU_CONSOLE_PREPARE)
   GU_CONSOLE_FLOW_OPS ops={NULL,Prepare,PrepareChoice,CaptureConsole,DetachConsole,ReadyConsoleWindows,VerifyConsole,StartConsoleWindows,Record};

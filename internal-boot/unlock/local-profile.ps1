@@ -83,7 +83,9 @@ function Get-LocalExpectedJobs([bool]$NoEdidDriver=$false) {
  'profile-lock-entryLatchedSs1Full'=0;'profile-lock-entryLatchedSs1Preserve'=0;
  'r2 console replay (real graph)'=0;'r2 replay other profile (must reject)'=1;
  'cold pre-check (read-only)'=0;'full flow gates'=0;'core transaction (efi)'=0;
- 'manual entry-latched'=0;'automatic internal'=0;'headless internal'=0;'headless USB (shipped child)'=0}
+ 'manual entry-latched'=0;'automatic internal'=0;'headless internal'=0;'headless USB (shipped child)'=0;
+ # The daily-boot (GU_PRODUCTION_BOOT) build is qualified by its own jobs, not by the diagnostic ones.
+ 'production full flow gates'=0;'production cold pre-check'=0;'production headless USB (shipped child)'=0}
  # A firmware without an EDID driver releases the GPU differently from every reviewed profile, so its
  # evidence must also hold the driver-release replay on its own graph.
  if($NoEdidDriver){$jobs['release replay, no EDID driver (real graph)']=0}

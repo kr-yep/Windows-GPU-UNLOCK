@@ -8,6 +8,7 @@ param(
  [switch]$AutomaticBoot,
  [switch]$HeadlessResearch,
  [switch]$UsbMedia,
+ [switch]$Production,
  [ValidateSet('original03100062','observed03000062','entryLatchedSs1Preserve','entryLatchedSs1Full')][string]$StockProfile,
  [ValidateSet('b650m-3090fe','b660m-3070ti','b660m-3090ti','x870-3090ti','b660plus-3060','h610m-3060','local')][string]$HardwareProfile='b650m-3090fe'
 )
@@ -49,6 +50,9 @@ try {
  if($HeadlessResearch){$out+='/headless-research';$name+='-HEADLESS-RESEARCH';$defines+='-DGU_HEADLESS_RESEARCH'}
  if($UsbMedia -and !$HeadlessResearch){throw 'USB media is only wired for the headless research child'}
  if($UsbMedia){$out+='/usb';$name+='-USB';$defines+='-DGU_USB_MEDIA'}
+ # Daily-boot child: no Esc window, success log or repeated PROM hash (results in host tests).
+ if($Production -and (!$HeadlessResearch -or !$UsbMedia -or !$AutomaticBoot)){throw 'Production is the headless USB automatic child only'}
+ if($Production){$out+='/production';$name+='-PRODUCTION';$defines+='-DGU_PRODUCTION_BOOT'}
   if($ExperimentalUnlock){$defines+= '-DGU_EXPERIMENTAL_3090';$defines+=$(switch($StockProfile){'original03100062'{'-DGU_STOCK_PROFILE_ORIGINAL_03100062'} 'observed03000062'{'-DGU_STOCK_PROFILE_OBSERVED_03000062'} 'entryLatchedSs1Preserve'{'-DGU_ENTRY_LATCHED_SS1_PRESERVE'} 'entryLatchedSs1Full'{'-DGU_ENTRY_LATCHED_SS1_FULL'}})}
  New-Item -ItemType Directory -Path $out -Force | Out-Null
  $sources=@('app','app_io','ownership','format','runtime','sha256','checks','port','compat',
@@ -64,8 +68,8 @@ try {
  & $Python verify_pe.py "$out/$name.EFI" "$out/$name.map" --output "$out/pe-verification.json"
  if($LASTEXITCODE -ne 0){throw 'PE verification failed'}
  $manifest=[ordered]@{BuiltUtc=[DateTime]::UtcNow.ToString('o');HardwareProfile=$hw.Name;TargetPci=$hw.TargetPci;Subsystem=$hw.Subsystem;
-  Mode=$(if($HeadlessResearch){'headless-research-automatic-internal-exact-card-unlock'}elseif($AutomaticBoot){'automatic-internal-exact-card-unlock'}elseif($ExperimentalUnlock){'experimental-exact-card-manual-unlock'}else{'diagnostic-preflight-only'});
-  CanArm=[bool]$ExperimentalUnlock;Defines=$defines;ManualConfirmation=$(if($AutomaticBoot){'none; Esc within 3 seconds cancels'}else{'U once; Esc or 30-second timeout cancels'});
+  Mode=$(if($Production){'production-headless-usb-automatic-exact-card-unlock'}elseif($HeadlessResearch){'headless-research-automatic-internal-exact-card-unlock'}elseif($AutomaticBoot){'automatic-internal-exact-card-unlock'}elseif($ExperimentalUnlock){'experimental-exact-card-manual-unlock'}else{'diagnostic-preflight-only'});
+  CanArm=[bool]$ExperimentalUnlock;Defines=$defines;ManualConfirmation=$(if($Production){'none; no Esc window'}elseif($AutomaticBoot){'none; Esc within 3 seconds cancels'}else{'U once; Esc or 30-second timeout cancels'});
   StockProfile=$(if($ExperimentalUnlock){$StockProfile}else{$null});ColdChipExpected=$hw.Chip;ColdSS0Expected=$(if($StockProfile -like 'entryLatchedSs1*'){'first fully validated cold entry; immutable'}elseif($ExperimentalUnlock){if($StockProfile -eq 'original03100062'){'0x03100062'}else{'0x03000062'}}else{'unknown'});ColdSS1Expected=$(if($StockProfile -like 'entryLatchedSs1*'){'first fully validated cold entry <= 0xf; immutable'}else{'0x6'});
   SS0Target='0x88888888';SS1Target=$(if($StockProfile -eq 'entryLatchedSs1Preserve'){'preserve entry; no SS1 writes'}elseif($StockProfile -eq 'entryLatchedSs1Full'){'0x8; one guarded write'}elseif($ExperimentalUnlock){'0x8'}else{'no writes'});
   OriginalBaselineCapture='G:/RTX3090-PREFLIGHT/RUN00/REPORT.TXT';

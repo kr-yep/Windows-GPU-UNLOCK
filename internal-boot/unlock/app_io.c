@@ -41,6 +41,9 @@ VOID GuConsole(const char *Text) {
 #endif
 }
 VOID GuLogText(const char *Text) {
+#ifdef GU_PRODUCTION_BOOT
+  (void)Text;return; /* No success log in production; see GuRecordFailure. */
+#endif
 #ifndef GU_HEADLESS_RESEARCH
   GuConsole(Text);
 #endif
@@ -50,6 +53,9 @@ VOID GuLogText(const char *Text) {
   if(EFI_ERROR(status) || written!=expected || EFI_ERROR(Report->Flush(Report)))LogError();
 }
 VOID GuLog(const char *Format,...) {
+#ifdef GU_PRODUCTION_BOOT
+  (void)Format;return;
+#endif
   char text[1024];va_list args;va_start(args,Format);
   size_t n=GuFormatV(text,sizeof(text),Format,args);va_end(args);
   if(n>=sizeof(text)){LogError();GuConsole("Log format or length error.\n");return;}
@@ -99,6 +105,9 @@ EFI_STATUS GuIoOpen(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
 #endif
   if(EFI_ERROR(status) || !Parent)return EFI_NOT_FOUND;
   status=Metadata(Parent,TRUE,0);if(EFI_ERROR(status))return status;
+#ifdef GU_PRODUCTION_BOOT
+  return EFI_SUCCESS; /* Assets are read from Parent; no per-run report folder. */
+#else
 #ifdef GU_AUTOMATIC_BOOT
   for(UINTN slot=0;slot<1000000;slot++) {
     CHAR16 name[]=L"AUTO000000";UINTN number=slot;
@@ -131,10 +140,26 @@ EFI_STATUS GuIoOpen(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
 #else
     GuLog("RTX3090 AMD read-only cold-state preflight\nRUN%02u\nCannot arm: GPU writes, DMA, reset and driver release are blocked.\n",(unsigned)slot);
 #endif
-    return GuLogReady()?EFI_SUCCESS:EFI_DEVICE_ERROR;
+    return GuLogGate()?EFI_SUCCESS:EFI_DEVICE_ERROR;
   }
   return EFI_VOLUME_FULL;
+#endif
 }
+#ifdef GU_PRODUCTION_BOOT
+static size_t FailureFormat(char *Text,size_t Capacity,const char *Format,...) {
+  va_list args;va_start(args,Format);size_t n=GuFormatV(Text,Capacity,Format,args);va_end(args);return n;
+}
+/* One appended line per failed run; nothing is written on success. */
+VOID GuRecordFailure(const char *Stage,EFI_STATUS Status) {
+  if(!Parent)return;
+  EFI_FILE_PROTOCOL *file=NULL;char text[160];size_t n=FailureFormat(text,sizeof(text),"FAIL stage=%s status=%#llx\n",Stage?Stage:"?",(unsigned long long)Status);
+  if(n>=sizeof(text))return;
+  if(EFI_ERROR(Parent->Open(Parent,&file,L"CHILD-FAILURE.TXT",EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0)) || !file)return;
+  UINTN written=n;
+  if(!EFI_ERROR(file->SetPosition(file,0xFFFFFFFFFFFFFFFFULL)))(void)file->Write(file,&written,text);
+  (void)file->Flush(file);(void)file->Close(file);
+}
+#endif
 EFI_STATUS GuLoadAssets(VOID) {
   for(UINTN i=0;i<5;i++) {
     EFI_FILE_PROTOCOL *file=NULL;const ASSET_SPEC *spec=&Specs[i];
@@ -155,7 +180,7 @@ EFI_STATUS GuLoadAssets(VOID) {
     if(EFI_ERROR(status)){GuFree(data);return status;}
     GuAssets[i].name=spec->name;GuAssets[i].firmware.data=data;GuAssets[i].firmware.size=spec->size;
     GuLog("asset verified: %s bytes=%zu sha256=%s\n",spec->name,(size_t)spec->size,spec->hash);
-    if(!GuLogReady())return EFI_DEVICE_ERROR;
+    if(!GuLogGate())return EFI_DEVICE_ERROR;
   }
   return EFI_SUCCESS;
 }

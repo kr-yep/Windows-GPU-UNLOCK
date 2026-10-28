@@ -33,7 +33,7 @@ static EFI_STATUS Step(EFI_STATUS Status) {
 #ifdef GU_AUTOMATIC_BOOT
   if(Status!=EFI_SUCCESS && !EFI_ERROR(Status))return EFI_DEVICE_ERROR;
 #endif
-  return !GuLogReady() && !EFI_ERROR(Status)?EFI_DEVICE_ERROR:Status;
+  return !GuLogGate() && !EFI_ERROR(Status)?EFI_DEVICE_ERROR:Status;
 }
 static VOID ConfigLog(const UINT32 *Config) {
   for(UINTN i=0;i<64;i+=4)GuLog("config[%02x]=%08x %08x %08x %08x\n",
@@ -89,7 +89,7 @@ static BOOLEAN AmdGopParent(EFI_DEVICE_PATH_PROTOCOL *Path) {
 #endif
 static BOOLEAN DisplayCheck(VOID) {
 #ifdef GU_HEADLESS_RESEARCH
-  return GuHeadlessCheck() && GuLogReady();
+  return GuHeadlessCheck() && GuLogGate();
 #else
   EFI_HANDLE *handles=NULL;UINTN count=0,intel=0;BOOLEAN valid=TRUE;
   EFI_GRAPHICS_OUTPUT_MODE_INFORMATION physical={0},forwarded={0};BOOLEAN forwarding=FALSE;
@@ -141,7 +141,7 @@ static BOOLEAN DisplayCheck(VOID) {
     GuLog("GOP console forwarded AMD match=%u\n",match);valid=valid && match;
   }
   GuFree(handles);GuLog("GOP result: valid=%u amd_physical=%zu\n",valid,(size_t)intel);
-  return valid && intel==1 && GuLogReady();
+  return valid && intel==1 && GuLogGate();
 #endif
 }
 static EFI_STATUS ReadConfig(UINT32 *Config) {
@@ -201,11 +201,11 @@ static EFI_STATUS RestoreDecode(VOID) {
   if(EFI_ERROR(status))return status;
   GuLog("decode restore intent: saved_command=%#x current_command=%#x missing=%#x attributes=%#llx\n",
     InitialConfig[1]&0xffff,current[1]&0xffff,missing,(unsigned long long)needed);
-  if(!GuLogReady() || Gu.fault)return EFI_DEVICE_ERROR;
+  if(!GuLogGate() || Gu.fault)return EFI_DEVICE_ERROR;
   /* Never use EFI_PCI_DEVICE_ENABLE: it would also enable bus mastering. */
   EFI_STATUS enabled=Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationEnable,needed,NULL);
   GuLog("decode enable status=%#llx\n",(unsigned long long)enabled);
-  if(!GuLogReady() || Gu.fault)return EFI_ERROR(enabled)?enabled:EFI_DEVICE_ERROR;
+  if(!GuLogGate() || Gu.fault)return EFI_ERROR(enabled)?enabled:EFI_DEVICE_ERROR;
   /* Even an error may follow a partial hardware effect. Capture it if readable,
      but never turn an API error into success merely because readback matches. */
   status=ReadConfig(after);
@@ -216,7 +216,7 @@ static EFI_STATUS RestoreDecode(VOID) {
   }
   if(EFI_ERROR(enabled))return enabled;
   if(EFI_ERROR(status))return status;
-  if(!GuLogReady() || Gu.fault)return EFI_DEVICE_ERROR;
+  if(!GuLogGate() || Gu.fault)return EFI_DEVICE_ERROR;
   return matched?EFI_SUCCESS:EFI_COMPROMISED_DATA;
 }
 static EFI_STATUS FindTarget(VOID) {
@@ -303,7 +303,7 @@ static EFI_STATUS ColdCheck(VOID) {
 #endif
     ss1);
   /* Logging is external I/O: a failed log never authorizes this profile. */
-  if(!GuLogReady() || Gu.fault)return EFI_DEVICE_ERROR;
+  if(!GuLogGate() || Gu.fault)return EFI_DEVICE_ERROR;
 #else
   if(ss0!=GU_STOCK_PROFILE_SS0 || ss1!=6)return EFI_NOT_READY;
 #endif
@@ -340,10 +340,14 @@ static EFI_STATUS Arm(VOID) {
 #error Automatic boot requires the exact internal full profile
 #endif
   if(!Gu.owned || !Gu.prom_verified || PendingOwner.agent)return EFI_ACCESS_DENIED;
+#ifdef GU_PRODUCTION_BOOT
+  /* No Esc window: the final hardware/headless gate before the core remains. */
+  return Gu.profile_verified && Gu.owned && Gu.prom_verified && Gu.display_ok && !Gu.fault && !PendingOwner.agent?EFI_SUCCESS:EFI_ACCESS_DENIED;
+#else
   if(!Table->ConIn || !Table->ConIn->Reset || !Table->ConIn->ReadKeyStroke || !Gu.bs->Stall)return EFI_UNSUPPORTED;
   EFI_STATUS status=Table->ConIn->Reset(Table->ConIn,FALSE);if(status!=EFI_SUCCESS)return status;
   GuLogText("AUTOMATIC INTERNAL UNLOCK: Esc within 3 seconds cancels. No U required. One guarded attempt only.\n");
-  if(!GuLogReady())return EFI_DEVICE_ERROR;
+  if(!GuLogGate())return EFI_DEVICE_ERROR;
   for(UINTN i=0;i<30;i++) {
 #ifdef GU_HEADLESS_RESEARCH
     if(!GuHeadlessCheck())return EFI_NOT_READY;
@@ -355,14 +359,15 @@ static EFI_STATUS Arm(VOID) {
     status=Gu.bs->Stall(100000);if(status!=EFI_SUCCESS)return status;
     Gu.ticks+=100000;
   }
-  return GuLogReady() && Gu.profile_verified && Gu.owned && Gu.prom_verified && Gu.display_ok && !Gu.fault && !PendingOwner.agent?EFI_SUCCESS:EFI_ACCESS_DENIED;
+  return GuLogGate() && Gu.profile_verified && Gu.owned && Gu.prom_verified && Gu.display_ok && !Gu.fault && !PendingOwner.agent?EFI_SUCCESS:EFI_ACCESS_DENIED;
+#endif
 #else
   if(!Table->ConIn || !Table->ConIn->Reset || !Table->ConIn->ReadKeyStroke)return EFI_UNSUPPORTED;
   EFI_STATUS status=Table->ConIn->Reset(Table->ConIn,FALSE);if(EFI_ERROR(status))return status;
   GuLog("EXPERIMENTAL MANUAL UNLOCK: profile=%s exact RTX3090 24GB / AMD display / verified PROM and assets.\n",GU_STOCK_PROFILE_NAME);
   if(PendingOwner.agent)GuLogText("U will release the RTX firmware driver, restore verified access settings if needed, then recheck and attempt once.\n");
   GuLogText("Press U to attempt once; Esc or 30-second timeout cancels.\n");
-  if(!GuLogReady())return EFI_DEVICE_ERROR;
+  if(!GuLogGate())return EFI_DEVICE_ERROR;
   for(UINTN i=0;i<300;i++) {
     EFI_INPUT_KEY key;status=Table->ConIn->ReadKeyStroke(Table->ConIn,&key);
     if(!EFI_ERROR(status)) {
@@ -453,7 +458,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
   status=Step(status);if(EFI_ERROR(status))goto finish;
   Stage="config-recheck";status=Step(ConfigCheck(FALSE));if(EFI_ERROR(status))goto finish;
   Stage="bar0";status=Step(BarCheck());if(EFI_ERROR(status))goto finish;
+#ifndef GU_PRODUCTION_BOOT
   Stage="prom";status=Step(PromCheck());if(EFI_ERROR(status))goto finish;
+#endif
   Stage="cold-state";status=Step(ColdCheck());if(EFI_ERROR(status))goto finish;
   Stage="assets";status=Step(GuLoadAssets());if(EFI_ERROR(status))goto finish;
   Stage="arming";status=Step(Arm());if(EFI_ERROR(status))goto finish;
@@ -464,7 +471,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
     GU_RELEASE_OWNER current;
     Stage="owner-recheck";
     GuLogText("Manual U confirmed: release RTX firmware driver once, then revalidate.\n");
-    if(!GuLogReady()){status=EFI_DEVICE_ERROR;goto finish;}
+    if(!GuLogGate()){status=EFI_DEVICE_ERROR;goto finish;}
     /* Durable intent precedes the last owner snapshot. No file IO between a
        successful final comparison and DisconnectController. */
     status=GuFindReleaseOwner(St,&current,FALSE);
@@ -488,11 +495,13 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
     Stage="prom-after-release";status=Step(PromCheck());if(EFI_ERROR(status))goto finish;
     Stage="cold-after-release";status=Step(ColdCheck());if(EFI_ERROR(status))goto finish;
   }
+#ifndef GU_PRODUCTION_BOOT
   Stage="final-prom";status=Step(PromCheck());if(EFI_ERROR(status))goto finish;
+#endif
   Stage="final-cold";status=Step(ColdCheck());if(EFI_ERROR(status))goto finish;
   if(!Gu.profile_verified || Gu.fault){status=EFI_ACCESS_DENIED;goto finish;}
   GuLogText("ARMED: one transaction is starting. Do not reset or remove the USB.\n");
-  if(!GuLogReady()){status=EFI_DEVICE_ERROR;goto finish;}
+  if(!GuLogGate()){status=EFI_DEVICE_ERROR;goto finish;}
 #ifdef GU_HEADLESS_RESEARCH
   /* File callbacks may change devices; no log/output between this gate and core. */
   if(!HeadlessFinalHardware() || !GuHeadlessCheck()){status=EFI_NOT_READY;goto finish;}
@@ -515,9 +524,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
   if(release_attempted && (EFI_ERROR(status) || Gu.fault))ReleaseHalt(status,attempted);
   if(attempted && !GuSafeToReturn())Halt();
   Gu.armed=FALSE;
-  if(GuLogReady())GuLog("FINAL status=%#llx stage=%s attempted=%u driver_release=%u clean=%u\n",(unsigned long long)status,Stage,attempted,release_attempted,GuSafeToReturn());
+#ifdef GU_PRODUCTION_BOOT
+  if(EFI_ERROR(status))GuRecordFailure(Stage,status);
+#endif
+  if(GuLogGate())GuLog("FINAL status=%#llx stage=%s attempted=%u driver_release=%u clean=%u\n",(unsigned long long)status,Stage,attempted,release_attempted,GuSafeToReturn());
   else GuConsole("Preflight or logging failed; no new attempt will start.\n");
-  if(!GuLogReady()){status=EFI_DEVICE_ERROR;if(release_attempted)ReleaseHalt(status,attempted);if(Gu.started)Halt();}
+  if(!GuLogGate()){status=EFI_DEVICE_ERROR;if(release_attempted)ReleaseHalt(status,attempted);if(Gu.started)Halt();}
   if(attempted && !GuSafeToReturn())Halt();
   EFI_STATUS closed=GuIoClose();
   if(EFI_ERROR(closed)){if(release_attempted)ReleaseHalt(closed,attempted);if(Gu.started)Halt();status=closed;}
