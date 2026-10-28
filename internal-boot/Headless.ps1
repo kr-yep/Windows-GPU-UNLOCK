@@ -1,5 +1,6 @@
 # GPL-2.0-only. Explicit dedicated ESP; no partition operations or automatic reboot.
-param([string]$Assets,[switch]$Register,[switch]$EnableAutomatic,[switch]$ConfirmedSuccess,[switch]$RestoreWindowsFirst)
+# -Production stages the daily-boot package (build-unlock.ps1 -Production) instead of the diagnostic one.
+param([string]$Assets,[switch]$Register,[switch]$EnableAutomatic,[switch]$ConfirmedSuccess,[switch]$RestoreWindowsFirst,[switch]$Production)
 $ErrorActionPreference='Stop'
 if(@(@($Register,$EnableAutomatic,$RestoreWindowsFirst) | Where-Object {$_}).Count -gt 1){throw 'Choose one action'}
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -43,7 +44,7 @@ if($RestoreWindowsFirst){
 }
 if($EnableAutomatic -and !$ConfirmedSuccess){throw 'First verify headless unlock, Windows display recovery and Tensor performance; then pass -ConfirmedSuccess'}
 $config=Assert-HeadlessLocalConfig $repo
-$package=Assert-HeadlessPackage $repo
+$package=Assert-HeadlessPackage $repo -Production:$Production
 function Target {
  $p=Get-Partition -DriveLetter $config.UnlockDriveLetter;$disk=Get-Disk -Number $p.DiskNumber;$v=$p | Get-Volume
  $w=@(Get-Partition | Where-Object {$_.Guid -eq $config.WindowsPartitionGuid})
@@ -51,18 +52,18 @@ function Target {
  $wv=$w[0] | Get-Volume
  if(!$wv.Path -or !(Test-Path -LiteralPath (Join-Path $wv.Path 'EFI\Microsoft\Boot\bootmgfw.efi'))){throw 'Windows Boot Manager missing'}
  $board=Get-CimInstance Win32_BaseBoard;$bios=Get-CimInstance Win32_BIOS
- $identity=Get-HeadlessProfileIdentity $package.HardwareProfile
+ $identity=Get-HeadlessProfileIdentity $package.HardwareProfile $config
  if($board.Product -ne $identity.Board -or $bios.SMBIOSBIOSVersion -ne $identity.Bios){throw 'Unsupported firmware profile'}
  return $v.Path
 }
 $root=Target
-if(Confirm-SecureBootUEFI){throw 'This unsigned experimental EFI requires Secure Boot disabled'}
+# The production child accepts Secure Boot; firmware then runs it only if both image hashes are in db.
+if(!$Production -and (Confirm-SecureBootUEFI)){throw 'This unsigned experimental EFI requires Secure Boot disabled'}
 $enc=Get-BitLockerVolume -MountPoint C:
 if([int]$enc.VolumeStatus -ne 0 -or [int]$enc.ProtectionStatus -ne 0){throw 'C: must be fully decrypted and protection off; this tool never changes encryption settings'}
-$child='unlock/build/experimental/entryLatchedSs1Full/internal/automatic/headless-research/RTX3090-EXPERIMENTAL-entryLatchedSs1Full-INTERNAL-AUTO-HEADLESS-RESEARCH.EFI'
 $artifacts=@(
- @('boot/build/headless/HEADLESS.EFI','EFI\WindowsGPUUnlock\HEADLESS.EFI',$package.EfiSha256),
- @($child,'EFI\WindowsGPUUnlock\UNLOCK-HEADLESS.EFI',$package.ChildSha256)
+ @(((Get-HeadlessPackageDir -Production:$Production)+'/HEADLESS.EFI'),'EFI\WindowsGPUUnlock\HEADLESS.EFI',$package.EfiSha256),
+ @((Get-HeadlessChildPath -Production:$Production),'EFI\WindowsGPUUnlock\UNLOCK-HEADLESS.EFI',$package.ChildSha256)
 )
 $assetSpecs=@(Get-HeadlessAssetSpecs $repo)
 function StageFile([string]$source,[string]$relative,[string]$hash){
@@ -74,7 +75,7 @@ function StageFile([string]$source,[string]$relative,[string]$hash){
 }
 function CheckStaged {
  if((Target) -ne $root){throw 'Target changed'}
- $null=Assert-HeadlessPackage $repo
+ $null=Assert-HeadlessPackage $repo -Production:$Production
  foreach($a in $artifacts){if((Get-FileHash -LiteralPath (Join-Path $root $a[1])).Hash -ne $a[2]){throw 'Installed EFI changed'}}
  foreach($a in $assetSpecs){$p=Join-Path $root ('RTX3090-UNLOCK\ASSETS\'+$a.Name);if((Get-Item -LiteralPath $p).Length -ne $a.Bytes -or (Get-FileHash -LiteralPath $p).Hash -ne $a.Sha256){throw 'Installed asset changed'}}
 }
@@ -82,7 +83,7 @@ if(!$EnableAutomatic){
  if(!$Assets){throw 'Specify the directory containing the five required local firmware assets'}
  # Validate every input before staging any file.
  foreach($a in $assetSpecs){$p=Join-Path $Assets $a.Name;if((Get-Item -LiteralPath $p).Length -ne $a.Bytes -or (Get-FileHash -LiteralPath $p).Hash -ne $a.Sha256){throw ('Asset mismatch: '+$a.Name)}}
- foreach($a in $artifacts){StageFile (Join-Path $PSScriptRoot $a[0]) $a[1] $a[2]}
+ foreach($a in $artifacts){StageFile (Join-Path $repo $a[0]) $a[1] $a[2]}
  foreach($a in $assetSpecs){StageFile (Join-Path $Assets $a.Name) ('RTX3090-UNLOCK\ASSETS\'+$a.Name) $a.Sha256}
 }
 CheckStaged

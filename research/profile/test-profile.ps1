@@ -121,7 +121,8 @@ try {
   @{Name='automatic internal';Defs=@('-DGU_INTERNAL_BOOT','-DGU_AUTOMATIC_BOOT');Src=@('tests/test_automatic.c')+$app;Args=@($prom,$cold,$Assets)},
   @{Name='headless internal';Defs=@('-DGU_INTERNAL_BOOT','-DGU_AUTOMATIC_BOOT','-DGU_HEADLESS_RESEARCH');Src=@('tests/test_headless.c')+$app;Args=@($prom,$cold,$Assets)},
   @{Name='headless USB (shipped child)';Defs=@('-DGU_INTERNAL_BOOT','-DGU_AUTOMATIC_BOOT','-DGU_HEADLESS_RESEARCH','-DGU_USB_MEDIA');Src=@('tests/test_headless.c')+$app;Args=@($prom,$cold,$Assets)},
-  @{Name='production headless USB (shipped child)';Defs=@('-DGU_INTERNAL_BOOT','-DGU_AUTOMATIC_BOOT','-DGU_HEADLESS_RESEARCH','-DGU_USB_MEDIA','-DGU_PRODUCTION_BOOT');Src=@('tests/test_headless.c')+$app;Args=@($prom,$cold,$Assets)}
+  @{Name='production headless USB (shipped child)';Defs=@('-DGU_INTERNAL_BOOT','-DGU_AUTOMATIC_BOOT','-DGU_HEADLESS_RESEARCH','-DGU_USB_MEDIA','-DGU_PRODUCTION_BOOT');Src=@('tests/test_headless.c')+$app;Args=@($prom,$cold,$Assets)},
+  @{Name='production headless ESP (shipped child)';Defs=@('-DGU_INTERNAL_BOOT','-DGU_AUTOMATIC_BOOT','-DGU_HEADLESS_RESEARCH','-DGU_PRODUCTION_BOOT');Src=@('tests/test_headless.c')+$app;Args=@($prom,$cold,$Assets)}
  )
  $i=0
  foreach($v in $variants){$exe="$out/tx-$i.exe";$i++;Run-Job $v.Name ($latched+$v.Defs+$v.Src+@('-o',$exe)) (@("./$exe")+$v.Args)}

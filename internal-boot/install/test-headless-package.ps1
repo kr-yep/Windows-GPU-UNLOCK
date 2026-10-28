@@ -2,7 +2,7 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'headless-package.ps1')
 $script:Checks=0
-$testRoot=Join-Path $PSScriptRoot ('build/headless-tests/'+[guid]::NewGuid().ToString('N'))
+$testRoot=Join-Path $PSScriptRoot ('build/headless-tests/'+[guid]::NewGuid().ToString('N').Substring(0,8))
 [void][IO.Directory]::CreateDirectory($testRoot)
 $childRelative='internal-boot/unlock/build/experimental/entryLatchedSs1Full/internal/automatic/headless-research/RTX3090-EXPERIMENTAL-entryLatchedSs1Full-INTERNAL-AUTO-HEADLESS-RESEARCH.EFI'
 $packageRelative='internal-boot/boot/build/headless/manifest.json'
@@ -77,7 +77,7 @@ function NewFixture([string]$Name){
  $childSize=(Get-Item -LiteralPath (FixturePath $f $childRelative)).Length
  Put $f 'internal-boot/boot/build/headless/child-contract.h' ("#define GU_UNLOCK_SHA256 `"$childHash`"`n#define GU_UNLOCK_BYTES $childSize`n")
  $cm=[ordered]@{
-  Mode='headless-research-automatic-internal-exact-card-unlock';StockProfile='entryLatchedSs1Full';EfiSha256=$childHash
+  Mode='headless-research-automatic-internal-exact-card-unlock';StockProfile='entryLatchedSs1Full';EfiSha256=$childHash;HardwareProfile='ASUS-TUF-B650M-PLUS-WIFI-3057-RTX3090-FE'
   Sources=@([ordered]@{Path='app.c';Sha256=(Hash $f 'internal-boot/unlock/app.c')})
   Headers=@([ordered]@{Path='port.h';Sha256=(Hash $f 'internal-boot/unlock/port.h')})
  }
@@ -167,10 +167,21 @@ $f=NewFixture 'wrong-child-profile'
 $cm=ReadJson $f $childManifestRelative;$cm.StockProfile='entryLatchedSs1Preserve'
 PutJson $f $childManifestRelative $cm;SealChildManifest $f
 Reject 'child full profile cannot silently become preserve profile' {Assert-HeadlessPackage $f} 'EFI/child manifest mismatch'
+$f=NewFixture 'child-hardware-profile'
+$cm=ReadJson $f $childManifestRelative;$cm.HardwareProfile='ASUS-TUF-GAMING-B660M-E-D4-4003-RTX3070TI'
+PutJson $f $childManifestRelative $cm;SealChildManifest $f
+Reject 'child built for another hardware profile' {Assert-HeadlessPackage $f} 'EFI/child manifest mismatch'
+$f=NewFixture 'local-not-production'
+$m=ReadJson $f $packageRelative;$m.HardwareProfile='LOCAL-220410de-87d91043-d6924286'
+PutJson $f $packageRelative $m
+Reject 'a local profile package is accepted only as the production build' {Assert-HeadlessPackage $f} 'production-only'
+Reject 'a local profile needs the board/BIOS recorded by Configure' {Get-HeadlessProfileIdentity 'LOCAL-220410de-87d91043-d6924286' ([pscustomobject]@{})} 'board/BIOS recorded'
+Check ((Get-HeadlessProfileIdentity 'LOCAL-220410de-87d91043-d6924286' ([pscustomobject]@{LocalBoard='X870E AERO X3D WOOD';LocalBios='F4'})).Bios -eq 'F4') 'local identity comes from the recorded configuration'
 
 foreach($kind in @('empty','duplicate','wrong-name','zero-length','bad-hash')){
  $f=NewFixture ('assets-'+$kind)
- $assets=@(ReadJson $f 'internal-boot/unlock/assets.json')
+ # Windows PowerShell 5.1 emits a JSON array as one pipeline object; unroll it.
+ $assets=@((ReadJson $f 'internal-boot/unlock/assets.json') | ForEach-Object {$_})
  switch($kind){
   'empty' {$assets=@()}
   'duplicate' {$assets[1].Name=$assets[0].Name}

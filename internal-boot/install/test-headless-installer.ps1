@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 $sourceRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 . (Join-Path $PSScriptRoot 'headless-package.ps1')
 $global:HeadlessRealJsonWriter=${function:Write-HeadlessJson}
-$testRoot=Join-Path $PSScriptRoot ('build/headless-installer/'+[guid]::NewGuid().ToString('N'))
+$testRoot=Join-Path $PSScriptRoot ('build/headless-installer/'+[guid]::NewGuid().ToString('N').Substring(0,8))
 $global:HeadlessTestRoot=$testRoot;$global:HeadlessChecks=0
 function Check($condition,[string]$message){$global:HeadlessChecks++;if(!$condition){throw ('FAIL: '+$message)}}
 function TextFile([string]$path,[string]$text){[void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path));[IO.File]::WriteAllText($path,$text)}
@@ -16,14 +16,15 @@ $global:HeadlessConfig=[pscustomobject]@{UnlockDriveLetter='U';UnlockPartitionGu
 $childRelative='unlock/build/experimental/entryLatchedSs1Full/internal/automatic/headless-research/RTX3090-EXPERIMENTAL-entryLatchedSs1Full-INTERNAL-AUTO-HEADLESS-RESEARCH.EFI'
 $wrapper=Join-Path $fixture 'internal-boot/boot/build/headless/HEADLESS.EFI';$child=Join-Path $fixture ('internal-boot/'+$childRelative)
 TextFile $wrapper 'synthetic wrapper';TextFile $child 'synthetic child'
-$global:HeadlessPackage=[pscustomobject]@{EfiSha256=(Get-FileHash $wrapper).Hash;ChildSha256=(Get-FileHash $child).Hash}
+$global:HeadlessPackage=[pscustomobject]@{HardwareProfile='ASUS-TUF-B650M-PLUS-WIFI-3057-RTX3090-FE';EfiSha256=(Get-FileHash $wrapper).Hash;ChildSha256=(Get-FileHash $child).Hash}
+$global:HeadlessBoard='TUF GAMING B650M-PLUS WIFI';$global:HeadlessBios='3057';$global:HeadlessSecureBoot=$false
 [void][IO.Directory]::CreateDirectory((Join-Path $fixture 'internal-boot/install'))
 [IO.File]::Copy((Join-Path $PSScriptRoot 'automatic-policy.ps1'),(Join-Path $fixture 'internal-boot/install/automatic-policy.ps1'),$false)
 $helperPath=(Join-Path $PSScriptRoot 'headless-package.ps1').Replace("'","''")
 $stub=@'
 . '@HELPER@'
 function Assert-HeadlessLocalConfig { if($global:HeadlessFailConfig){throw 'Config unavailable'};return $global:HeadlessConfig }
-function Assert-HeadlessPackage { if($global:HeadlessFailConfig){throw 'Build unavailable'};return $global:HeadlessPackage }
+function Assert-HeadlessPackage { param($Repo,[switch]$Production) if($global:HeadlessFailConfig){throw 'Build unavailable'};if($Production){return $global:HeadlessProdPackage};return $global:HeadlessPackage }
 function Write-HeadlessJson($Path,$Value){if($global:HeadlessFailStateMode -and $Value.Mode -eq $global:HeadlessFailStateMode){throw 'Injected metadata write failure'};& $global:HeadlessRealJsonWriter $Path $Value}
 '@
 TextFile (Join-Path $fixture 'internal-boot/install/headless-package.ps1') ($stub.Replace('@HELPER@',$helperPath))
@@ -58,8 +59,8 @@ function Get-Partition {param([string]$DriveLetter)
 }
 function Get-Disk {param($Number)return [pscustomobject]@{UniqueId='synthetic-disk'}}
 function Get-Volume {param([Parameter(ValueFromPipeline)]$InputObject)process{return [pscustomobject]@{FileSystem='FAT32';Path=$(if($InputObject.IsSystem){$global:HeadlessWindows}else{$global:HeadlessTarget})}}}
-function Get-CimInstance {param($ClassName)if($ClassName -eq 'Win32_BaseBoard'){return [pscustomobject]@{Product='TUF GAMING B650M-PLUS WIFI'}};return [pscustomobject]@{SMBIOSBIOSVersion='3057'}}
-function Confirm-SecureBootUEFI {return $false}
+function Get-CimInstance {param($ClassName)if($ClassName -eq 'Win32_BaseBoard'){return [pscustomobject]@{Product=$global:HeadlessBoard}};return [pscustomobject]@{SMBIOSBIOSVersion=$global:HeadlessBios}}
+function Confirm-SecureBootUEFI {return $global:HeadlessSecureBoot}
 function Get-BitLockerVolume {param($MountPoint)return [pscustomobject]@{VolumeStatus=0;ProtectionStatus=0}}
 function Get-Item {param($LiteralPath,$Path)
  $p=if($LiteralPath){$LiteralPath}else{$Path}
@@ -97,5 +98,33 @@ try {
  Check ($global:HeadlessOrder[0] -eq '{bootmgr}' -and $global:HeadlessHiber -eq 1) 'recovery works without configuration/build and restores power'
  [IO.File]::WriteAllText($global:HeadlessState,'broken JSON');& $installer -RestoreWindowsFirst
  Check ($global:HeadlessOrder[0] -eq '{bootmgr}') 'unreadable state cannot prevent Windows-first recovery'
+
+ # Daily-boot package for a local profile on a fresh ESP, with Secure Boot enforcing.
+ $global:HeadlessFailConfig=$false;Remove-Item -LiteralPath $global:HeadlessState -ErrorAction Stop
+ $global:HeadlessTarget=Join-Path $testRoot 'esp-production'
+ $global:HeadlessEntries=@{'{bootmgr}'=$global:HeadlessEntries['{bootmgr}'];$global:HeadlessOldId=$global:HeadlessEntries[$global:HeadlessOldId]}
+ $global:HeadlessOrder=@($global:HeadlessOldId,'{bootmgr}');$global:HeadlessHiber=1;$global:HeadlessHiberExists=$true
+ $pWrapper=Join-Path $fixture ((Get-HeadlessPackageDir -Production)+'/HEADLESS.EFI');$pChild=Join-Path $fixture (Get-HeadlessChildPath -Production)
+ TextFile $pWrapper 'synthetic production wrapper';TextFile $pChild 'synthetic production child'
+ $global:HeadlessProdPackage=[pscustomobject]@{HardwareProfile='LOCAL-220410de-87d91043-d6924286';EfiSha256=(Get-FileHash $pWrapper).Hash;ChildSha256=(Get-FileHash $pChild).Hash}
+ $global:HeadlessConfig | Add-Member NoteProperty LocalBoard 'X870E AERO X3D WOOD' -Force;$global:HeadlessConfig | Add-Member NoteProperty LocalBios 'F4' -Force
+ $global:HeadlessSecureBoot=$true
+ $failed=$false;try{& $installer -Assets $assets}catch{$failed=$_.Exception.Message -match 'Secure Boot disabled'}
+ Check ($failed -and !(Test-Path -LiteralPath $global:HeadlessTarget)) 'diagnostic package still refuses Secure Boot enforcing before staging'
+ $global:HeadlessBoard='X870E AERO X3D WOOD';$global:HeadlessBios='F5';$failed=$false;try{& $installer -Assets $assets -Production}catch{$failed=$_.Exception.Message -match 'Unsupported firmware profile'}
+ Check ($failed -and !(Test-Path -LiteralPath $global:HeadlessTarget)) 'a BIOS other than the recorded one refuses the local package before staging'
+ $global:HeadlessBios='F4';$global:HeadlessBcdCalls=0
+ & $installer -Assets $assets -Production
+ Check ((Get-FileHash (Join-Path $global:HeadlessTarget 'EFI/WindowsGPUUnlock/HEADLESS.EFI')).Hash -eq $global:HeadlessProdPackage.EfiSha256 -and (Get-FileHash (Join-Path $global:HeadlessTarget 'EFI/WindowsGPUUnlock/UNLOCK-HEADLESS.EFI')).Hash -eq $global:HeadlessProdPackage.ChildSha256) 'production stage copies the production pair under Secure Boot'
+ Check ($global:HeadlessBcdCalls -eq 0) 'production stage-only does not access BCD'
+ & $installer -Assets $assets -Register -Production
+ $pid2=(Get-Content -LiteralPath $global:HeadlessState -Raw | ConvertFrom-Json).EntryId
+ Check (($global:HeadlessOrder -join ',') -eq (@($global:HeadlessOldId,'{bootmgr}',$pid2) -join ',')) 'production registration appends the entry last'
+ $failed=$false;try{& $installer -EnableAutomatic -ConfirmedSuccess}catch{$failed=$true}
+ Check ($failed -and $global:HeadlessOrder[0] -eq $global:HeadlessOldId) 'promotion without -Production cannot adopt the production registration'
+ & $installer -EnableAutomatic -ConfirmedSuccess -Production
+ Check (($global:HeadlessOrder -join ',') -eq (@($pid2,'{bootmgr}',$global:HeadlessOldId) -join ',') -and $global:HeadlessHiber -eq 0) 'production promotion puts the entry first and Windows second'
+ & $installer -RestoreWindowsFirst
+ Check ($global:HeadlessOrder[0] -eq '{bootmgr}' -and $global:HeadlessHiber -eq 1) 'Windows-first recovery after a production promotion'
  Write-Output "PASS actual Headless.ps1 mocked integration: $global:HeadlessChecks checks; no real disk/registry/BCD access. Fixtures: $testRoot"
 } finally {$env:ProgramData=$oldProgramData}

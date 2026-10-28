@@ -1,11 +1,17 @@
 # GPL-2.0-only. Local build provenance; no disk or firmware mutation.
-function Get-HeadlessInputInventory([string]$Repo,[switch]$WithContract){
+. (Join-Path $PSScriptRoot '../unlock/local-profile.ps1')
+function Get-HeadlessPackageDir([switch]$Production){if($Production){'internal-boot/boot/build/headless-production'}else{'internal-boot/boot/build/headless'}}
+function Get-HeadlessChildPath([switch]$Production){
+ $dir='internal-boot/unlock/build/experimental/entryLatchedSs1Full/internal/automatic/headless-research'
+ if($Production){"$dir/production/RTX3090-EXPERIMENTAL-entryLatchedSs1Full-INTERNAL-AUTO-HEADLESS-RESEARCH-PRODUCTION.EFI"}else{"$dir/RTX3090-EXPERIMENTAL-entryLatchedSs1Full-INTERNAL-AUTO-HEADLESS-RESEARCH.EFI"}
+}
+function Get-HeadlessInputInventory([string]$Repo,[switch]$WithContract,[switch]$Production){
  $base=[IO.Path]::GetFullPath($Repo).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
  $runtime=Join-Path $base 'internal-boot'
  $paths=@(Get-ChildItem -LiteralPath $runtime -Recurse -File | Where-Object {$_.Extension -in '.c','.h','.ps1' -and $_.FullName.Substring($runtime.Length+1) -notmatch '(^|[\\/])build([\\/]|$)'})
  $paths+=Get-ChildItem -LiteralPath (Join-Path $base 'deps/edk2/MdePkg/Include') -Recurse -File -Filter '*.h'
  $paths+=Get-Item -LiteralPath (Join-Path $base 'internal-boot/local-config.json'),(Join-Path $base 'internal-boot/unlock/assets.json'),(Join-Path $base 'research/headless/build-unlock.ps1')
- if($WithContract){$paths+=Get-Item -LiteralPath (Join-Path $base 'internal-boot/boot/build/headless/child-contract.h')}
+ if($WithContract){$paths+=Get-Item -LiteralPath (Join-Path $base ((Get-HeadlessPackageDir -Production:$Production)+'/child-contract.h'))}
  return @($paths | Sort-Object FullName -Unique | ForEach-Object {[ordered]@{Path=$_.FullName.Substring($base.Length+1).Replace([char]92,[char]47);Sha256=(Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant()}})
 }
 function Get-HeadlessGuidInitializer([guid]$Value){
@@ -20,7 +26,12 @@ function Assert-HeadlessLocalConfig([string]$Repo){
  if($text -notcontains ('#define GU_INTERNAL_PARTITION_INITIALIZER '+(Get-HeadlessGuidInitializer ([guid]$cfg.UnlockPartitionGuid))) -or $text -notcontains ('#define GU_WINDOWS_PARTITION_INITIALIZER '+(Get-HeadlessGuidInitializer ([guid]$cfg.WindowsPartitionGuid)))){throw 'Generated partition header differs from local configuration'}
  return $cfg
 }
-function Get-HeadlessProfileIdentity([string]$Profile){
+function Get-HeadlessProfileIdentity([string]$Profile,$Config){
+ # A local profile carries the board/BIOS that Configure.ps1 recorded on this machine.
+ if($Profile -cmatch '^LOCAL-[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}$'){
+  if(!$Config -or !$Config.LocalBoard -or !$Config.LocalBios){throw 'Local profile needs the board/BIOS recorded by Configure.ps1 -HardwareProfile local'}
+  return @{Board=[string]$Config.LocalBoard;Bios=[string]$Config.LocalBios}
+ }
  switch($Profile){
   'ASUS-TUF-B650M-PLUS-WIFI-3057-RTX3090-FE'{return @{Board='TUF GAMING B650M-PLUS WIFI';Bios='3057'}}
   'ASUS-TUF-GAMING-B660M-E-D4-4003-RTX3070TI'{return @{Board='TUF GAMING B660M-E D4';Bios='4003'}}
@@ -28,23 +39,30 @@ function Get-HeadlessProfileIdentity([string]$Profile){
  }
  throw ('Unknown hardware profile: '+$Profile)
 }
-function Assert-HeadlessPackage([string]$Repo){
+function Assert-HeadlessPackage([string]$Repo,[switch]$Production){
  $null=Assert-HeadlessLocalConfig $Repo
- $m=Get-Content -LiteralPath (Join-Path $Repo 'internal-boot/boot/build/headless/manifest.json') -Raw | ConvertFrom-Json
- if($m.Format -ne 2 -or $m.Mode -ne 'single-rtx-headless-unlock-then-windows' -or $m.CanUnlock -ne $true -or $m.RequiresHumanKey -ne $false -or $m.HardwareProfile -notin @('ASUS-TUF-B650M-PLUS-WIFI-3057-RTX3090-FE','ASUS-TUF-GAMING-B660M-E-D4-4003-RTX3070TI','ASUS-TUF-GAMING-B660M-E-D4-4003-RTX3090TI')){throw 'Unexpected headless package profile'}
- $actual=Get-HeadlessInputInventory $Repo -WithContract
+ $dir=Get-HeadlessPackageDir -Production:$Production
+ $m=Get-Content -LiteralPath (Join-Path $Repo "$dir/manifest.json") -Raw | ConvertFrom-Json
+ $mode=if($Production){'production-single-rtx-headless-unlock-then-windows'}else{'single-rtx-headless-unlock-then-windows'}
+ $local=$m.HardwareProfile -cmatch '^LOCAL-[0-9a-f]{8}-[0-9a-f]{8}-[0-9a-f]{8}$'
+ if($m.Format -ne 2 -or $m.Mode -cne $mode -or $m.CanUnlock -ne $true -or $m.RequiresHumanKey -ne $false -or
+    !($local -or $m.HardwareProfile -in @('ASUS-TUF-B650M-PLUS-WIFI-3057-RTX3090-FE','ASUS-TUF-GAMING-B660M-E-D4-4003-RTX3070TI','ASUS-TUF-GAMING-B660M-E-D4-4003-RTX3090TI'))){throw 'Unexpected headless package profile'}
+ # A local package must be the daily-boot build and still match the evidence it was built from.
+ if($local){if(!$Production){throw 'A local profile package is production-only'};Assert-LocalProfilePackage $Repo $m}
+ $actual=Get-HeadlessInputInventory $Repo -WithContract -Production:$Production
  if($actual.Count -ne $m.Inputs.Count){throw 'Build source set changed; rebuild the package'}
  for($i=0;$i -lt $actual.Count;$i++){if($actual[$i].Path -cne $m.Inputs[$i].Path -or $actual[$i].Sha256 -ne $m.Inputs[$i].Sha256){throw ('Build input changed; rebuild: '+$actual[$i].Path)}}
- $wrapper=Join-Path $Repo 'internal-boot/boot/build/headless/HEADLESS.EFI'
- $child=Join-Path $Repo 'internal-boot/unlock/build/experimental/entryLatchedSs1Full/internal/automatic/headless-research/RTX3090-EXPERIMENTAL-entryLatchedSs1Full-INTERNAL-AUTO-HEADLESS-RESEARCH.EFI'
+ $wrapper=Join-Path $Repo "$dir/HEADLESS.EFI"
+ $child=Join-Path $Repo (Get-HeadlessChildPath -Production:$Production)
+ $childMode=if($Production){'production-headless-esp-automatic-exact-card-unlock'}else{'headless-research-automatic-internal-exact-card-unlock'}
  $cmFile=Join-Path (Split-Path $child) 'build-manifest.json';$cm=Get-Content -LiteralPath $cmFile -Raw | ConvertFrom-Json
- if((Get-FileHash -LiteralPath $wrapper).Hash -ne $m.EfiSha256 -or (Get-Item -LiteralPath $wrapper).Length -ne $m.EfiBytes -or (Get-FileHash -LiteralPath $child).Hash -ne $m.ChildSha256 -or (Get-Item -LiteralPath $child).Length -ne $m.ChildBytes -or (Get-FileHash -LiteralPath $cmFile).Hash -ne $m.ChildManifestSha256 -or $cm.Mode -ne 'headless-research-automatic-internal-exact-card-unlock' -or $cm.StockProfile -ne 'entryLatchedSs1Full' -or $cm.EfiSha256 -ne $m.ChildSha256){throw 'Headless EFI/child manifest mismatch'}
+ if((Get-FileHash -LiteralPath $wrapper).Hash -ne $m.EfiSha256 -or (Get-Item -LiteralPath $wrapper).Length -ne $m.EfiBytes -or (Get-FileHash -LiteralPath $child).Hash -ne $m.ChildSha256 -or (Get-Item -LiteralPath $child).Length -ne $m.ChildBytes -or (Get-FileHash -LiteralPath $cmFile).Hash -ne $m.ChildManifestSha256 -or $cm.Mode -ne $childMode -or $cm.HardwareProfile -ne $m.HardwareProfile -or $cm.StockProfile -ne 'entryLatchedSs1Full' -or $cm.EfiSha256 -ne $m.ChildSha256){throw 'Headless EFI/child manifest mismatch'}
  foreach($item in @($cm.Sources)+@($cm.Headers)){
   $root=[IO.Path]::GetFullPath((Join-Path $Repo 'internal-boot/unlock')).TrimEnd([char]92)+[IO.Path]::DirectorySeparatorChar
   $path=[IO.Path]::GetFullPath((Join-Path $root $item.Path))
   if(!$path.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) -or (Get-FileHash -LiteralPath $path).Hash -ne $item.Sha256){throw 'Child source/header provenance mismatch'}
  }
- $contract=Get-Content -LiteralPath (Join-Path $Repo 'internal-boot/boot/build/headless/child-contract.h')
+ $contract=Get-Content -LiteralPath (Join-Path $Repo "$dir/child-contract.h")
  if($contract -notcontains ('#define GU_UNLOCK_SHA256 "'+$m.ChildSha256.ToLowerInvariant()+'"') -or $contract -notcontains ('#define GU_UNLOCK_BYTES '+$m.ChildBytes)){throw 'Wrapper child contract mismatch'}
  return $m
 }

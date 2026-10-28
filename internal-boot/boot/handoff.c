@@ -33,8 +33,8 @@
 #ifdef GU_PRODUCTION_BOOT
 /* Daily-boot build: same hardware gates, no Esc wait, graph captures or success
  * log. Only a failure record is written. Qualification stays in host tests. */
-#if !defined(GU_FULL_UNLOCK) || !defined(GU_HEADLESS_RESEARCH) || !defined(GU_USB_MEDIA) || !defined(GU_AUTOMATIC_BOOT)
-#error GU_PRODUCTION_BOOT is the headless USB automatic unlock only
+#if !defined(GU_FULL_UNLOCK) || !defined(GU_HEADLESS_RESEARCH) || !defined(GU_AUTOMATIC_BOOT)
+#error GU_PRODUCTION_BOOT is the headless automatic unlock only (USB or dedicated ESP)
 #endif
 #endif
 #ifdef GU_FULL_UNLOCK
@@ -474,9 +474,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
 #ifdef GU_FULL_UNLOCK
   ScreenStatus("full-flow-returned",s);
 #endif
-#if defined(GU_FULL_UNLOCK) && defined(GU_USB_MEDIA)
-  /* Default-boot USB stick: if no driver was released, the GPU and firmware are
-   * untouched, so hand back to the firmware BootOrder (next: Windows Boot Manager). */
+#if defined(GU_FULL_UNLOCK) && (defined(GU_USB_MEDIA) || defined(GU_PRODUCTION_BOOT))
+  /* Default-boot entry (USB stick or daily-boot ESP): if no driver was released, the GPU
+   * and firmware are untouched, so hand back to the firmware BootOrder (next: Windows). */
   if(!ReleaseStarted) {
     if(Log){(void)Log->Close(Log);Log=NULL;}
     if(Root){(void)Root->Close(Root);Root=NULL;}

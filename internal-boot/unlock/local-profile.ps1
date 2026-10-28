@@ -38,7 +38,8 @@ function Get-LocalRequiredFiles {
  @('internal-boot/efi_runtime.c','internal-boot/unlock/local-profile.ps1',
    'internal-boot/unlock/gpu-family.h','internal-boot/unlock/firmware-profile.h',
    'internal-boot/unlock/build.ps1','internal-boot/boot/handoff.c',
-   'research/headless/build-usb.ps1','research/headless/stage-usb.ps1',
+   'research/headless/build-usb.ps1','research/headless/stage-usb.ps1','research/headless/build-unlock.ps1',
+   'internal-boot/Configure.ps1','internal-boot/Headless.ps1','internal-boot/install/headless-package.ps1','internal-boot/install/automatic-policy.ps1',
    'research/profile/make-profile.py','research/profile/capture_graph.py','research/profile/test-profile.ps1',
    'research/profile/host.ps1','research/profile/proven.json')
 }
@@ -48,7 +49,7 @@ function Get-LocalTreeInputs([string]$Repo) {
   if(!(Test-Path -LiteralPath (Join-Path $Repo $required) -PathType Leaf)){throw "Missing required input: $required"}
  }
  $files=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
- $roots=@('internal-boot/unlock','internal-boot/boot','research/profile','research/headless','deps/edk2/MdePkg/Include')
+ $roots=@('internal-boot/unlock','internal-boot/boot','internal-boot/install','research/profile','research/headless','deps/edk2/MdePkg/Include')
  foreach($entry in $roots) {
   $base=Join-Path $Repo $entry
   if(!(Test-Path -LiteralPath $base -PathType Container)){throw "Missing input root: $entry"}
@@ -60,13 +61,14 @@ function Get-LocalTreeInputs([string]$Repo) {
     if($f.Attributes -band [IO.FileAttributes]::ReparsePoint){throw "Untracked indirect input: $rel"}
     if($f.PSIsContainer){$pending.Push($f.FullName);continue}
     if($f.Extension -notmatch '^\.(c|h|py|json|ps1)$'){continue}
-    if($rel -in @('internal-boot/unlock/profile-local.h','internal-boot/boot/platform-config.h','internal-boot/boot/generated.h')){continue}
+    if($rel -in @('internal-boot/unlock/profile-local.h','internal-boot/boot/platform-config.h','internal-boot/boot/generated.h',
+       'internal-boot/install/state.json','internal-boot/install/headless-state.json') -or $rel -like 'internal-boot/install/headless-state.json.pending-*'){continue}
     $files[$rel]=Get-GuSha256 $f.FullName;$found++
    }
   }
   if(!$found){throw "Empty input root: $entry"}
  }
- $files['internal-boot/efi_runtime.c']=Get-GuSha256 (Join-Path $Repo 'internal-boot/efi_runtime.c')
+ foreach($top in @('internal-boot/efi_runtime.c','internal-boot/Configure.ps1','internal-boot/Headless.ps1')){$files[$top]=Get-GuSha256 (Join-Path $Repo $top)}
  [string[]]$paths=@($files.Keys);[Array]::Sort($paths,[StringComparer]::Ordinal)
  foreach($path in $paths){[pscustomobject][ordered]@{Path=$path;Sha256=$files[$path]}}
 }
@@ -85,7 +87,8 @@ function Get-LocalExpectedJobs([bool]$NoEdidDriver=$false) {
  'cold pre-check (read-only)'=0;'full flow gates'=0;'core transaction (efi)'=0;
  'manual entry-latched'=0;'automatic internal'=0;'headless internal'=0;'headless USB (shipped child)'=0;
  # The daily-boot (GU_PRODUCTION_BOOT) build is qualified by its own jobs, not by the diagnostic ones.
- 'production full flow gates'=0;'production cold pre-check'=0;'production headless USB (shipped child)'=0}
+ 'production full flow gates'=0;'production cold pre-check'=0;'production headless USB (shipped child)'=0;
+ 'production headless ESP (shipped child)'=0}
  # A firmware without an EDID driver releases the GPU differently from every reviewed profile, so its
  # evidence must also hold the driver-release replay on its own graph.
  if($NoEdidDriver){$jobs['release replay, no EDID driver (real graph)']=0}
