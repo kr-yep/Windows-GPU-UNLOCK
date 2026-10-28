@@ -1,0 +1,109 @@
+{
+ "torch": "2.7.1+cu128",
+ "cuda": "12.8",
+ "device": "NVIDIA GeForce RTX 3090",
+ "before": {
+  "name": "NVIDIA GeForce RTX 3090",
+  "driver_version": "616.92",
+  "power.limit": "390.00 W",
+  "clocks.max.sm": "2130 MHz",
+  "clocks.sm": "210 MHz",
+  "temperature.gpu": "42",
+  "utilization.gpu": "10 %",
+  "memory.used": "658 MiB",
+  "pci.bus_id": "00000000:01:00.0"
+ },
+ "modes": {
+  "4096_fp32_control": {
+   "median_tflops": 23.86,
+   "runs": [
+    23.62,
+    23.8,
+    24.02,
+    23.94,
+    23.86
+   ]
+  },
+  "4096_tf32": {
+   "median_tflops": 57.84,
+   "runs": [
+    58.6,
+    57.84,
+    57.86,
+    57.7,
+    55.56
+   ]
+  },
+  "4096_fp16": {
+   "median_tflops": 113.11,
+   "runs": [
+    131.48,
+    113.72,
+    109.65,
+    112.16,
+    113.11
+   ]
+  },
+  "4096_bf16": {
+   "median_tflops": 115.85,
+   "runs": [
+    133.87,
+    117.74,
+    112.08,
+    115.11,
+    115.85
+   ]
+  },
+  "8192_fp32_control": {
+   "median_tflops": 25.0,
+   "runs": [
+    25.12,
+    25.11,
+    24.85,
+    25.0,
+    24.96
+   ]
+  },
+  "8192_tf32": {
+   "median_tflops": 63.46,
+   "runs": [
+    63.61,
+    63.42,
+    63.27,
+    63.46,
+    63.47
+   ]
+  },
+  "8192_fp16": {
+   "median_tflops": 113.98,
+   "runs": [
+    113.13,
+    113.98,
+    114.52,
+    114.55,
+    113.94
+   ]
+  },
+  "8192_bf16": {
+   "median_tflops": 116.66,
+   "runs": [
+    116.91,
+    116.66,
+    117.12,
+    116.45,
+    115.84
+   ]
+  }
+ },
+ "after": {
+  "name": "NVIDIA GeForce RTX 3090",
+  "driver_version": "616.92",
+  "power.limit": "390.00 W",
+  "clocks.max.sm": "2130 MHz",
+  "clocks.sm": "1530 MHz",
+  "temperature.gpu": "58",
+  "utilization.gpu": "100 %",
+  "memory.used": "1862 MiB",
+  "pci.bus_id": "00000000:01:00.0"
+ }
+}

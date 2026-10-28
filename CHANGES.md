@@ -1,5 +1,29 @@
 # Changes
 
+## Fork, 2026-10-28 — local-profile daily boot, Secure Boot enforcing, internal ESP
+
+Modified from upstream `c403e8f` (GPL-2.0-only; files changed are listed in the
+commits after that revision). Guide: [WINDOWS-DAILY-BOOT](docs/WINDOWS-DAILY-BOOT.en.md);
+evidence: [x870e-aero-3090-local](evidence/x870e-aero-3090-local/README.md).
+
+- Split a production build (`-Production`) from the diagnostic boot path: no Esc
+  waits, graph captures, log-file search or success logs, and the second/third
+  child PROM rereads and duplicate console/pre-close verifications are dropped.
+  All per-boot hardware gates stay. The diagnostic build is byte-identical.
+  On a refusal before any driver release the production wrapper returns to the
+  firmware boot order (USB and ESP).
+- The production child accepts Secure Boot enforcing; `tools/secureboot` builds an
+  `EFI_CERT_SHA256` list of the two unsigned EFIs for a db Append and checks that
+  PK/KEK/dbx are unchanged and db gained only those entries.
+- `stage-usb.ps1 -Production`; `build-unlock.ps1`, `Configure.ps1`,
+  `headless-package.ps1` and `Headless.ps1` accept a local profile (production
+  only, board/BIOS recorded at configure time) on a dedicated internal ESP.
+- `Headless.ps1 -Uninstall`; the input inventory skips `build/` while walking
+  (MAX_PATH under Windows PowerShell 5.1).
+- Hardware: one Gigabyte X870E AERO X3D WOOD / ASUS RTX 3090 machine, one run per
+  boot type. Not tested: other boards or firmware vendors, sleep/hibernate,
+  `-Uninstall` on hardware.
+
 ## Unreleased — separate GPU family traits, firmware templates and machine pins
 
 - Centralize exact GA102/GA104/GA106 chip revisions and current PCI-ID/VRAM

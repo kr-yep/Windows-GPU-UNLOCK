@@ -47,6 +47,7 @@ Firmware assets and private, partition-specific EFI binaries are not bundled.
 |---|---|---|
 | **Internal headless** | B650M/3090 FE or B660M/3070 Ti / 3090 Ti profile; monitors on RTX; display temporarily removed; no T/U/Enter | [Internal headless guide](docs/HEADLESS.en.md) |
 | **Headless USB** | Reported RTX 3060 / 3090 Ti configurations; profile-specific wrapper and child on a FAT32 USB stick | [Headless USB guide](docs/HEADLESS-USB.en.md) |
+| Local profile daily boot (fork) | Your own [new-machine](docs/NEW-MACHINE.en.md) profile; production build on USB or a dedicated internal ESP, optionally with Secure Boot enforcing | [Daily boot guide](docs/WINDOWS-DAILY-BOOT.en.md) |
 | Internal AMD-display manual / Auto | Original B650M profile, motherboard/iGPU display preserved; manual variant requires U | [Existing internal guide](docs/INTERNAL-BOOT.en.md) |
 | Legacy USB manual | Original AMD/iGPU display profile; U once, then Boot Override to Windows without reset | [Legacy USB guide](docs/GUIDE.en.md) |
 
