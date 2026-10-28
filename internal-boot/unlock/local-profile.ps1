@@ -159,9 +159,10 @@ function Assert-LocalProfilePackage([string]$Repo,$Manifest) {
     $Manifest.LocalProfileEvidenceSha256 -cne (Get-GuSha256 (Join-Path $Repo 'research/profile/local/test-results.json'))){throw 'USB package was built from another local profile, source tree or test run; rebuild it'}
 }
 
-function Assert-GuUsbManifest([string]$Repo,$Manifest) {
+function Assert-GuUsbManifest([string]$Repo,$Manifest,[bool]$Production=$false) {
+ $mode=if($Production){'production-single-rtx-headless-unlock-then-windows-usb'}else{'single-rtx-headless-unlock-then-windows-usb'}
  if($Manifest.Format -isnot [int] -or $Manifest.Format -ne 2 -or
-    $Manifest.Mode -cne 'single-rtx-headless-unlock-then-windows-usb' -or
+    $Manifest.Mode -cne $mode -or
     $Manifest.CanUnlock -isnot [bool] -or !$Manifest.CanUnlock -or
     $Manifest.RequiresHumanKey -isnot [bool] -or $Manifest.RequiresHumanKey -or
     $Manifest.HardwareTested -isnot [bool] -or $Manifest.HardwareTested){throw 'Invalid headless USB manifest format/mode/flags; rebuild the package'}

@@ -138,6 +138,14 @@ Put 'research/profile/local/test-results.json' $baseline
 $manifest=[ordered]@{Format=2;Mode='single-rtx-headless-unlock-then-windows-usb';CanUnlock=$true;RequiresHumanKey=$false;HardwareTested=$false;EfiSha256=('0'*64);ChildSha256=('1'*64)}
 foreach($key in $package.Keys){$manifest[$key]=$package[$key]}
 Assert-GuUsbManifest $sandbox $manifest;$checks++
+# Diagnostic and production packages are staged only under their own switch.
+$accepted=$true;try{Assert-GuUsbManifest $sandbox $manifest $true}catch{$accepted=$false}
+if($accepted){throw 'Diagnostic manifest accepted as production'};$checks++
+$manifest.Mode='production-single-rtx-headless-unlock-then-windows-usb'
+Assert-GuUsbManifest $sandbox $manifest $true;$checks++
+$accepted=$true;try{Assert-GuUsbManifest $sandbox $manifest}catch{$accepted=$false}
+if($accepted){throw 'Production manifest accepted as diagnostic'};$checks++
+$manifest.Mode='single-rtx-headless-unlock-then-windows-usb'
 foreach($value in @($null,'','unknown','LOCAL-bad','local-220410de-145410de-12345678')) {
  $manifest.HardwareProfile=$value
  $accepted=$true;try{Assert-GuUsbManifest $sandbox $manifest}catch{$accepted=$false}

@@ -1,6 +1,7 @@
 # GPL-2.0-only. Copy a build-usb.ps1 package and the five local assets to a FAT32 USB stick.
 # Files only: no partitioning, formatting, boot entries or firmware settings change.
-param([Parameter(Mandatory)][ValidatePattern('^[D-Zd-z]$')][string]$Drive,[Parameter(Mandatory)][string]$Assets)
+# -Production stages the build-usb.ps1 -Production pair; its manifest mode must match the switch.
+param([Parameter(Mandatory)][ValidatePattern('^[D-Zd-z]$')][string]$Drive,[Parameter(Mandatory)][string]$Assets,[switch]$Production)
 $ErrorActionPreference='Stop'
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $part=Get-Partition -DriveLetter $Drive;$disk=Get-Disk -Number $part.DiskNumber;$vol=Get-Volume -DriveLetter $Drive
@@ -14,23 +15,25 @@ function Put([string]$src,[string]$rel,[string]$hash) {
  if((Sha $dst) -ne $hash){throw "Copy verification failed: $rel"}
  "{0,-48} {1}" -f $rel,$hash
 }
-$m=Get-Content (Join-Path $repo 'internal-boot/boot/build/headless/usb-manifest.json') -Raw | ConvertFrom-Json
+$hl=Join-Path $repo $(if($Production){'internal-boot/boot/build/headless-production'}else{'internal-boot/boot/build/headless'})
+$m=Get-Content (Join-Path $hl 'usb-manifest.json') -Raw | ConvertFrom-Json
 # Validate identity before the first destination write, including missing/unknown
 # profile names which must never bypass the local evidence gate.
 . (Join-Path $repo 'internal-boot/unlock/local-profile.ps1')
-Assert-GuUsbManifest $repo $m
-$child=Join-Path $repo 'internal-boot/unlock/build/experimental/entryLatchedSs1Full/internal/automatic/headless-research/usb/RTX3090-EXPERIMENTAL-entryLatchedSs1Full-INTERNAL-AUTO-HEADLESS-RESEARCH-USB.EFI'
+Assert-GuUsbManifest $repo $m $Production.IsPresent
+$child=Join-Path $repo ('internal-boot/unlock/build/experimental/entryLatchedSs1Full/internal/automatic/headless-research/usb/'+
+ $(if($Production){'production/RTX3090-EXPERIMENTAL-entryLatchedSs1Full-INTERNAL-AUTO-HEADLESS-RESEARCH-USB-PRODUCTION.EFI'}else{'RTX3090-EXPERIMENTAL-entryLatchedSs1Full-INTERNAL-AUTO-HEADLESS-RESEARCH-USB.EFI'}))
 $boot=Join-Path $usb 'EFI\BOOT\BOOTX64.EFI'
 if(Test-Path -LiteralPath $boot) {
  $bak=Join-Path $usb ('RTX3090-UNLOCK\backup\BOOTX64-'+(Sha $boot).Substring(0,12)+'.EFI')
  if(!(Test-Path -LiteralPath $bak)){[void][IO.Directory]::CreateDirectory((Split-Path $bak));Copy-Item -LiteralPath $boot -Destination $bak}
  "previous BOOTX64.EFI kept as $bak"
 }
-Put (Join-Path $repo 'internal-boot/boot/build/headless/HEADLESS.EFI') 'EFI\BOOT\BOOTX64.EFI' $m.EfiSha256
+Put (Join-Path $hl 'HEADLESS.EFI') 'EFI\BOOT\BOOTX64.EFI' $m.EfiSha256
 Put $child 'EFI\WindowsGPUUnlock\UNLOCK-HEADLESS.EFI' $m.ChildSha256
 foreach($a in (Get-Content (Join-Path $repo 'internal-boot/unlock/assets.json') -Raw | ConvertFrom-Json)) {
  $src=Join-Path $Assets $a.Name
  if((Get-Item -LiteralPath $src).Length -ne $a.Bytes){throw ('Asset size mismatch: '+$a.Name)}
  Put $src ('RTX3090-UNLOCK\ASSETS\'+$a.Name) $a.Sha256.ToLowerInvariant()
 }
-"Staged $($m.HardwareProfile) on $usb. Boot it once with the firmware boot menu before making it a default boot device."
+"Staged $($m.HardwareProfile) ($($m.Mode)) on $usb. Boot it once with the firmware boot menu before making it a default boot device."
