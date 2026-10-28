@@ -434,7 +434,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE Image,EFI_SYSTEM_TABLE *St) {
   UINT8 secure=0xff;UINTN bytes=1;
   Stage="secure-boot";
   status=St->RuntimeServices->GetVariable(L"SecureBoot",&GlobalGuid,NULL,&bytes,&secure);
+#ifdef GU_PRODUCTION_BOOT
+  /* Daily boot may run with Secure Boot enforcing (images enrolled in db); only a malformed read refuses. */
+  if(EFI_ERROR(status) || bytes!=1 || secure>1){status=EFI_SECURITY_VIOLATION;goto finish;}
+#else
   if(EFI_ERROR(status) || bytes!=1 || secure){status=EFI_SECURITY_VIOLATION;goto finish;}
+#endif
   status=Step(status);if(EFI_ERROR(status))goto finish;
   Stage="watchdog";status=Step(Gu.bs->SetWatchdogTimer(0,0,0,NULL));if(EFI_ERROR(status))goto finish;
   Stage="target";status=Step(FindTarget());if(EFI_ERROR(status))goto finish;

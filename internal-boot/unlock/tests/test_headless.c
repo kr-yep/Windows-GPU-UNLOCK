@@ -78,6 +78,13 @@ static EFI_STATUS EFIAPI HeadWrite(EFI_FILE_PROTOCOL *f,UINTN *n,VOID *data) {
   return file_write(f,n,data);
 }
 #ifdef GU_PRODUCTION_BOOT
+/* SecureBoot variable cases: 0/1 value, 2 out-of-range value, 3 read error, 4 wrong size. */
+static int VarCase;
+static EFI_STATUS EFIAPI HeadVar(CHAR16 *name,EFI_GUID *g,UINT32 *attributes,UINTN *n,VOID *data) {
+  char text[64];narrow(text,sizeof(text),name);CHECK(!strcmp(text,"SecureBoot") && g && *n==1);
+  if(VarCase==3)return EFI_DEVICE_ERROR;
+  if(attributes)*attributes=6;*(UINT8 *)data=(UINT8)(VarCase<3?VarCase:1);*n=VarCase==4?2:1;return EFI_SUCCESS;
+}
 static EFI_STATUS EFIAPI HeadRead(EFI_FILE_PROTOCOL *f,UINTN *n,VOID *data) {
   EFI_STATUS s=file_read(f,n,data);FILE_FAKE *v=(FILE_FAKE *)f;
   if(v->kind==8 && !AssetsDone) {
@@ -93,7 +100,7 @@ static EFI_STATUS EFIAPI HeadRead(EFI_FILE_PROTOCOL *f,UINTN *n,VOID *data) {
 static VOID HeadSetup(int mode) {
   entry_setup(mode==7?APP_FLUSH:APP_SUCCESS,0x03000062,6);Case=mode;Reads=Outputs=0;
 #ifdef GU_PRODUCTION_BOOT
-  AssetsDone=FALSE;
+  AssetsDone=FALSE;VarCase=0;rt.GetVariable=HeadVar;
   for(int i=4;i<9;i++)files[i].protocol.Read=HeadRead;
 #endif
   LatePending=LateDelivered=LatePhysical=FALSE;
@@ -127,6 +134,14 @@ int main(int argc,char **argv) {
     CHECK(current_tpl==TPL_APPLICATION);
     CHECK(!Outputs && !disconnect_calls);dispose_host_fixture();
   }
+  /* Secure Boot enforcing is accepted; any malformed SecureBoot read refuses before hardware. */
+  for(int v=1;v<=4;v++) {
+    HeadSetup(0);VarCase=v;EFI_STATUS s=run_app();
+    CHECK(Reads==0 && report_bytes==0 && current_tpl==TPL_APPLICATION && !Outputs);
+    if(v==1){CHECK(s==EFI_SUCCESS && fake.flrs==1 && registers[SS0/4]==0x88888888 && Gu.quiesced && !halted && !fake.pool_live);}
+    else{CHECK(s!=EFI_SUCCESS && !Gu.started && !fake.mmio_writes && !fake.master_enables && !fake.flrs);}
+    dispose_host_fixture();
+  }
 #else
   for(int mode=0;mode<=15;mode++) {
     HeadSetup(mode);EFI_STATUS s=run_app();
@@ -146,7 +161,7 @@ int main(int argc,char **argv) {
   puts("PASS USB media: USB child volume accepted; internal-partition child volume refused");
 #endif
 #ifdef GU_PRODUCTION_BOOT
-  puts("PASS production headless child: no key reads or log writes; zero-GOP/virtual success; physical/invalid GOP, owner warning, late input/config/SS0/owner/notification changes after asset load refused; console calls zero");return 0;
+  puts("PASS production headless child: no key reads or log writes; zero-GOP/virtual success; Secure Boot on accepted, malformed SecureBoot read refused; physical/invalid GOP, owner warning, late input/config/SS0/owner/notification changes after asset load refused; console calls zero");return 0;
 #else
   puts("PASS headless real app/core: zero-GOP and virtual-only success; physical/invalid GOP, late input/log mutation, Esc, file warning/failure and owner warning blocked; console calls zero");return 0;
 #endif
