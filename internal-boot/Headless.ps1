@@ -1,8 +1,8 @@
 # GPL-2.0-only. Explicit dedicated ESP; no partition operations or automatic reboot.
 # -Production stages the daily-boot package (build-unlock.ps1 -Production) instead of the diagnostic one.
-param([string]$Assets,[switch]$Register,[switch]$EnableAutomatic,[switch]$ConfirmedSuccess,[switch]$RestoreWindowsFirst,[switch]$Production)
+param([string]$Assets,[switch]$Register,[switch]$EnableAutomatic,[switch]$ConfirmedSuccess,[switch]$RestoreWindowsFirst,[switch]$Uninstall,[switch]$Production)
 $ErrorActionPreference='Stop'
-if(@(@($Register,$EnableAutomatic,$RestoreWindowsFirst) | Where-Object {$_}).Count -gt 1){throw 'Choose one action'}
+if(@(@($Register,$EnableAutomatic,$RestoreWindowsFirst,$Uninstall) | Where-Object {$_}).Count -gt 1){throw 'Choose one action'}
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'install/automatic-policy.ps1')
 . (Join-Path $PSScriptRoot 'install/headless-package.ps1')
@@ -41,6 +41,38 @@ if($RestoreWindowsFirst){
  )
  if((Order (Bcd @('/enum','{fwbootmgr}')))[0] -ne '{bootmgr}'){throw 'Windows-first recovery verification failed'}
  Write-Output 'Windows first restored. Existing entries and files retained; no reboot.';return
+}
+if($Uninstall){
+ # Removes only what -Register/staging recorded: Windows first, the saved entry, the staged
+ # files and the state. Needs no build, so it works after a BIOS update or card change.
+ if(!(Test-Path -LiteralPath $stateFile)){throw 'No registration state; nothing recorded to remove'}
+ $s=Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
+ if($s.EntryId -notmatch '^\{[0-9a-f-]{36}\}$' -or $s.Path -ne $entryPath -or $s.Name -ne $entryName){throw 'Unexpected registration state; remove nothing'}
+ $config=Assert-HeadlessLocalConfig $repo
+ $p=Get-Partition -DriveLetter $config.UnlockDriveLetter;$v=$p | Get-Volume
+ if($p.IsSystem -or $p.Guid -ne $config.UnlockPartitionGuid -or $p.GptType -ne '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' -or $v.FileSystem -ne 'FAT32' -or !$v.Path){throw 'Configured dedicated ESP not found at its letter; mount it and retry'}
+ $root=$v.Path
+ $files=@('EFI\WindowsGPUUnlock\HEADLESS.EFI','EFI\WindowsGPUUnlock\UNLOCK-HEADLESS.EFI')+@(Get-HeadlessAssetSpecs $repo | ForEach-Object {'RTX3090-UNLOCK\ASSETS\'+$_.Name})
+ $present=ExistsBcd $s.EntryId
+ if($present){
+  $e=Bcd @('/enum',$s.EntryId)
+  if($e -notmatch ('(?mi)^device\s+partition='+[regex]::Escape($config.UnlockDriveLetter)+':\s*$') -or $e -notmatch ('(?mi)^path\s+'+[regex]::Escape($entryPath)+'\s*$') -or $e -notmatch ('(?m)^description\s+'+[regex]::Escape($entryName)+'\s*$')){throw 'Saved entry no longer matches this package; remove nothing'}
+ }
+ $order=Order (Bcd @('/enum','{fwbootmgr}'))
+ $backup=Join-Path $env:ProgramData ('WindowsGPUUnlock\HeadlessBackups\'+(Get-Date -Format 'yyyyMMdd-HHmmssfff'))
+ [void][IO.Directory]::CreateDirectory($backup);[void](Bcd @('/export',(Join-Path $backup 'BCD-export')))
+ [IO.File]::Copy($stateFile,(Join-Path $backup 'state-before-uninstall.json'),$false)
+ Invoke-RecoveryActions -Actions @(
+  {SetOrder (@('{bootmgr}')+@($order | Where-Object {$_ -ne '{bootmgr}' -and $_ -ne $s.EntryId}))},
+  {if($s.HiberbootBefore){SetHiber $s.HiberbootBefore}},
+  {if($present -and (ExistsBcd $s.EntryId)){[void](Bcd @('/delete',$s.EntryId))}},
+  {foreach($f in $files){$t=Join-Path $root $f;if(Test-Path -LiteralPath $t){Remove-Item -LiteralPath $t -Force -ErrorAction Stop}}}
+ )
+ if((Order (Bcd @('/enum','{fwbootmgr}')))[0] -ne '{bootmgr}' -or (ExistsBcd $s.EntryId)){throw "Uninstall verification failed; state kept. Backup: $backup"}
+ foreach($f in $files){if(Test-Path -LiteralPath (Join-Path $root $f)){throw "Staged file still present: $f; state kept. Backup: $backup"}}
+ foreach($d in 'RTX3090-UNLOCK\ASSETS','EFI\WindowsGPUUnlock'){$t=Join-Path $root $d;if((Test-Path -LiteralPath $t) -and !@(Get-ChildItem -LiteralPath $t -Force).Count){Remove-Item -LiteralPath $t -ErrorAction Stop}}
+ Remove-Item -LiteralPath $stateFile -ErrorAction Stop
+ Write-Output "Uninstalled: Windows first, entry and staged files removed; other files on the ESP kept. No reboot. Backup: $backup";return
 }
 if($EnableAutomatic -and !$ConfirmedSuccess){throw 'First verify headless unlock, Windows display recovery and Tensor performance; then pass -ConfirmedSuccess'}
 $config=Assert-HeadlessLocalConfig $repo

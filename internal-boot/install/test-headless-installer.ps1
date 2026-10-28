@@ -126,5 +126,26 @@ try {
  Check (($global:HeadlessOrder -join ',') -eq (@($pid2,'{bootmgr}',$global:HeadlessOldId) -join ',') -and $global:HeadlessHiber -eq 0) 'production promotion puts the entry first and Windows second'
  & $installer -RestoreWindowsFirst
  Check ($global:HeadlessOrder[0] -eq '{bootmgr}' -and $global:HeadlessHiber -eq 1) 'Windows-first recovery after a production promotion'
+
+ # Uninstall, then a rebuilt package installs again (BIOS update / re-profile path).
+ $staged=@('EFI/WindowsGPUUnlock/HEADLESS.EFI','EFI/WindowsGPUUnlock/UNLOCK-HEADLESS.EFI')+@($specs | ForEach-Object {'RTX3090-UNLOCK/ASSETS/'+$_.Name})
+ TextFile (Join-Path $global:HeadlessTarget 'RTX3090-UNLOCK/FAILURE.TXT') 'synthetic failure record'
+ $global:HeadlessEntries[$pid2].Path='\EFI\Other\X.EFI';$before=$global:HeadlessBcdCalls;$failed=$false
+ try{& $installer -Uninstall}catch{$failed=$_.Exception.Message -match 'no longer matches'}
+ Check ($failed -and $global:HeadlessEntries.ContainsKey($pid2) -and (Test-Path -LiteralPath $global:HeadlessState) -and @($staged | Where-Object {!(Test-Path -LiteralPath (Join-Path $global:HeadlessTarget $_))}).Count -eq 0) 'uninstall refuses a changed entry before deleting anything'
+ Check (($global:HeadlessOrder -join ',') -eq (@('{bootmgr}',$pid2,$global:HeadlessOldId) -join ',')) 'refused uninstall leaves boot order unchanged'
+ $global:HeadlessEntries[$pid2].Path='\EFI\WindowsGPUUnlock\HEADLESS.EFI'
+ & $installer -Uninstall
+ Check (!$global:HeadlessEntries.ContainsKey($pid2) -and ($global:HeadlessOrder -join ',') -eq (@('{bootmgr}',$global:HeadlessOldId) -join ',')) 'uninstall deletes only the saved entry and keeps Windows first'
+ Check (@($staged | Where-Object {Test-Path -LiteralPath (Join-Path $global:HeadlessTarget $_)}).Count -eq 0 -and !(Test-Path -LiteralPath (Join-Path $global:HeadlessTarget 'EFI/WindowsGPUUnlock'))) 'uninstall removes the staged files and the empty EFI folder'
+ Check ((Test-Path -LiteralPath (Join-Path $global:HeadlessTarget 'RTX3090-UNLOCK/FAILURE.TXT')) -and !(Test-Path -LiteralPath $global:HeadlessState) -and $global:HeadlessHiber -eq 1) 'uninstall keeps unrelated ESP files, drops state and restores Fast Startup'
+ $before=$global:HeadlessBcdCalls;$failed=$false;try{& $installer -Uninstall}catch{$failed=$_.Exception.Message -match 'No registration state'}
+ Check ($failed -and $global:HeadlessBcdCalls -eq $before) 'uninstall without state changes nothing'
+ TextFile $pWrapper 'synthetic rebuilt production wrapper'
+ $global:HeadlessProdPackage=[pscustomobject]@{HardwareProfile=$global:HeadlessProdPackage.HardwareProfile;EfiSha256=(Get-FileHash $pWrapper).Hash;ChildSha256=$global:HeadlessProdPackage.ChildSha256}
+ & $installer -Assets $assets -Production
+ & $installer -Assets $assets -Register -Production
+ $pid3=(Get-Content -LiteralPath $global:HeadlessState -Raw | ConvertFrom-Json).EntryId
+ Check ((Get-FileHash (Join-Path $global:HeadlessTarget 'EFI/WindowsGPUUnlock/HEADLESS.EFI')).Hash -eq $global:HeadlessProdPackage.EfiSha256 -and ($global:HeadlessOrder -join ',') -eq (@('{bootmgr}',$global:HeadlessOldId,$pid3) -join ',')) 'a rebuilt package stages and registers after uninstall'
  Write-Output "PASS actual Headless.ps1 mocked integration: $global:HeadlessChecks checks; no real disk/registry/BCD access. Fixtures: $testRoot"
 } finally {$env:ProgramData=$oldProgramData}

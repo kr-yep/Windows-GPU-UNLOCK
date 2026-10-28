@@ -8,7 +8,13 @@ function Get-HeadlessChildPath([switch]$Production){
 function Get-HeadlessInputInventory([string]$Repo,[switch]$WithContract,[switch]$Production){
  $base=[IO.Path]::GetFullPath($Repo).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
  $runtime=Join-Path $base 'internal-boot'
- $paths=@(Get-ChildItem -LiteralPath $runtime -Recurse -File | Where-Object {$_.Extension -in '.c','.h','.ps1' -and $_.FullName.Substring($runtime.Length+1) -notmatch '(^|[\\/])build([\\/]|$)'})
+ # Never descend into build/: test fixtures there exceed MAX_PATH under Windows PowerShell 5.1.
+ $paths=@();$dirs=[Collections.Generic.Stack[string]]::new();$dirs.Push($runtime)
+ while($dirs.Count){
+  $d=$dirs.Pop()
+  foreach($sub in [IO.Directory]::GetDirectories($d)){if([IO.Path]::GetFileName($sub) -ne 'build'){$dirs.Push($sub)}}
+  foreach($f in [IO.Directory]::GetFiles($d)){if([IO.Path]::GetExtension($f) -in '.c','.h','.ps1' -and [IO.Path]::GetFileName($f) -ne 'build'){$paths+=Get-Item -LiteralPath $f}}
+ }
  $paths+=Get-ChildItem -LiteralPath (Join-Path $base 'deps/edk2/MdePkg/Include') -Recurse -File -Filter '*.h'
  $paths+=Get-Item -LiteralPath (Join-Path $base 'internal-boot/local-config.json'),(Join-Path $base 'internal-boot/unlock/assets.json'),(Join-Path $base 'research/headless/build-unlock.ps1')
  if($WithContract){$paths+=Get-Item -LiteralPath (Join-Path $base ((Get-HeadlessPackageDir -Production:$Production)+'/child-contract.h'))}
